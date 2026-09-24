@@ -142,6 +142,8 @@ http://192.168.8.99:18086
 
 ## 方式二：docker compose部署
 
+推荐使用
+
 services:
   nasphere:
     image: ghcr.io/peekaboo789/nasphere:1.0.0
