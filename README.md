@@ -140,65 +140,26 @@ http://192.168.8.99:18086
 
 ---
 
-## 方式二：已有源码目录
+## 方式二：docker compose部署
 
-如果已经下载了 NASphere：
+services:
+  nasphere:
+    image: ghcr.io/peekaboo789/nasphere:1.0.0
+    container_name: nasphere
 
-```bash
-cd /vol2/1000/dockers/NASphere
+    restart: unless-stopped
 
-cp .env.example .env
+    ports:
+      - "18086:18086"
 
-chmod +x deploy.sh make-image.sh
+    volumes:
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
 
-./deploy.sh
-```
+    environment:
+      TZ: Asia/Shanghai
 
-脚本旁边就有 `Dockerfile` 和 `server/index.js` 时自动走本机模式，不会再下载源码。
 
-部署脚本会自动：
-
-1. 检查 Docker
-2. 读取版本号
-3. 备份 `data/config.json`
-4. 备份 `data/auth.json`
-5. 构建 Docker 镜像
-6. 启动 NASphere
-7. 检查 `/api/health`
-8. 启动失败自动回滚旧镜像
-
----
-
-# 🔄 更新 NASphere
-
-在项目目录里执行：
-
-```bash
-./deploy.sh --update
-```
-
-会先从 GitHub 拉最新源码，再重新构建部署。
-
-一键安装过的那条命令也可以直接重跑。
-
-项目数据默认保存在：
-
-```text
-./data
-```
-
-更新程序代码不会删除：
-
-```text
-config.json
-auth.json
-uploads/
-.env
-```
-
-因此正常升级不会影响已经设置好的主页，登录账号密码也不变。
-
----
 
 # 🔐 首次登录
 
@@ -206,159 +167,12 @@ uploads/
 
 ```text
 用户名：admin
-密码　：<本次随机生成的 16 位密码>
+密码　：<admin123>
 ```
 
-这个密码只在安装输出里打印一次，留档位置：
 
-```text
-项目目录/.env
-```
 
-权限 `600`，忘记密码时在这里查。
 
-**第一次登录后请立即进入：**
-
-```text
-设置 → 安全
-```
-
-修改账号和密码。
-
-也可以在第一次部署之前通过 `.env` 指定，这样首装就不再生成随机密码：
-
-```env
-NAV_USER=admin
-NAV_PASSWORD=你的密码
-```
-
-注意：
-
-`NAV_USER` / `NAV_PASSWORD` 主要用于初始化 `auth.json`。
-
-如果 `data/auth.json` 已经存在，修改环境变量不会直接覆盖现有账号密码。
-
-> 直接 `docker compose up -d` 且没有 `.env` 时用的是镜像内置默认密码，手动部署前先写好 `.env`。
-
----
-
-# 📦 Docker Compose
-
-如果希望手动使用 Docker Compose：
-
-```bash
-cp .env.example .env
-docker compose up -d --build
-```
-
-默认访问：
-
-```text
-http://<NAS-IP>:18086
-```
-
-修改端口：
-
-```env
-HOST_PORT=9000
-```
-
-然后：
-
-```bash
-docker compose up -d --build
-```
-
-访问：
-
-```text
-http://<NAS-IP>:9000
-```
-
----
-
-# 🐳 Docker Run
-
-也可以直接运行：
-
-```bash
-docker build -t nasphere:1.0.0 .
-```
-
-然后：
-
-```bash
-docker run -d \
-  --name nasphere \
-  --restart unless-stopped \
-  -p 18086:18086 \
-  -e NAV_USER='admin' \
-  -e NAV_PASSWORD='你自己的密码' \
-  -v "$(pwd)/data:/data" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  nasphere:1.0.0
-```
-
-其中：
-
-```text
-18086:18086
-```
-
-表示：
-
-```text
-NAS 宿主机 18086 → NASphere 容器 18086
-```
-
-容器内部固定监听 `18086`（镜像里 `ENV PORT=18086`），冒号右边那一位不要跟着改。
-
----
-
-# 📦 离线部署
-
-如果 NAS 无法访问 Docker Hub，可以在其他 Docker 环境制作离线镜像：
-
-```bash
-./make-image.sh
-```
-
-生成：
-
-```text
-dist/nasphere-<版本>.tar.gz
-dist/nasphere-<版本>.sha256
-```
-
-将镜像包传到 NAS 后：
-
-```bash
-./deploy.sh --tar dist/nasphere-1.0.0.tar.gz
-```
-
-脚本会：
-
-```text
-加载镜像
- ↓
-识别镜像版本
- ↓
-重新标记
- ↓
-备份 data
- ↓
-启动容器
- ↓
-健康检查
-```
-
-NAS 连 GitHub 也上不了时，改用本地源码包安装：
-
-```bash
-./deploy.sh --source /volume1/docker/NASphere-src.tar.gz
-```
-
----
 
 # ✨ 功能
 
