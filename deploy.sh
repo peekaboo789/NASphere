@@ -11,7 +11,7 @@
 #
 # 模式二：本机已经有项目目录
 #
-#   cd /vol2/1000/dockers/NASphere
+#   cd ./dat
 #   ./deploy.sh
 #
 # 升级：重跑上面任意一条，脚本自己 pull 新镜像；换版本用 ./deploy.sh --tag 1.1.0
@@ -33,7 +33,7 @@ BRANCH="${BRANCH:-main}"
 # 没有 git 时的退路：直接下源码压缩包（去掉 .git 后缀就是 archive 地址）
 SOURCE_TARBALL="${GITHUB_REPO%.git}/archive/refs/heads/${BRANCH}.tar.gz"
 
-DEFAULT_ROOT="${DEFAULT_ROOT:-/vol2/1000/dockers/NASphere}"
+DEFAULT_ROOT="${DEFAULT_ROOT:-./dat}"
 
 # curl | bash 时 BASH_SOURCE[0] 是未定义的，$0 才是 "bash"。
 # 这里必须带 :- 回落，否则 set -u 会让脚本在第 30 行直接死掉，
@@ -126,16 +126,16 @@ NASphere 一键安装 / 部署工具
     curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | \
       bash -s -- --root /volume1/docker/NASphere --port 9000
 
-    源码装到 --root（或 INSTALL_ROOT），默认 /vol2/1000/dockers/NASphere；
+    源码装到 --root（或 INSTALL_ROOT），默认 ./dat，也就是执行命令时所在目录下的 dat/；
     那个目录已经在跑 NASphere 就等于原地升级，data/ 不会被覆盖。
 
   模式二 本机已有项目目录（在目录里直接执行就是部署 / 升级）：
-    cd /vol2/1000/dockers/NASphere
+    cd ./dat
     ./deploy.sh
 
 选项：
 
-  --root <目录>        一键安装时源码装到哪里，默认 /vol2/1000/dockers/NASphere
+  --root <目录>        一键安装时源码装到哪里，默认 ./dat（相对当前目录）
   --update             从 GitHub 拉取最新版并重新部署
   --source <压缩包>    用本地或内网的源码 tar.gz 安装，跳过 GitHub（NAS 没有 git 时用）
   --tar <文件>         加载 docker save 导出的镜像包，跳过构建
@@ -165,7 +165,7 @@ NASphere 一键安装 / 部署工具
 
 默认：
 
-  安装目录：
+  项目目录：
     ./dat
 
   镜像：
@@ -736,7 +736,9 @@ if [ "$LOCAL_MODE" = 1 ]; then
 
 else
 
-  ROOT="${INSTALL_ROOT:-${ENV_INSTALL_ROOT:-$DEFAULT_ROOT}}"
+  # 默认值可以是相对路径（./dat），必须在这里按调用时的目录定死，
+  # 后面会 cd 进项目目录，晚一步解析就会指到别处
+  ROOT="$(absolute_path "${INSTALL_ROOT:-${ENV_INSTALL_ROOT:-$DEFAULT_ROOT}}")"
 
   log "模式：一键安装（源码目录 $ROOT）"
 
@@ -1015,7 +1017,7 @@ gen_password() {
 
   local pw="" chunk=""
 
-  # 只用字母数字：要塞进 .env、-e 参数和 compose 插值里，不掺杂需要转义的字符
+  # 只用字母数字：要塞进 .env 和 docker run 的 -e 参数里，不掺杂需要转义的字符
   while [ "${#pw}" -lt 16 ]; do
 
     if [ ! -r /dev/urandom ]; then
@@ -1094,11 +1096,7 @@ if [ "$FIRST_RUN" = 1 ]; then
   log "首次启动：账号 $NAV_USER"
 fi
 
-if [ -n "$COMPOSE_MODE" ]; then
-  log "部署方式：$([ "$COMPOSE_MODE" = v2 ] && echo 'docker compose' || echo docker-compose)"
-else
-  log "部署方式：docker run"
-fi
+log "部署方式：docker run"
 
 if [ "$DRY" = 1 ]; then
   warn "dry-run：只打印命令，不做任何修改"
@@ -1486,27 +1484,10 @@ fi
 up_with() {
 
   local ref="$1"
-  local img tag
 
-  img="${ref%:*}"
-  tag="${ref##*:}"
-
-  if [ -n "$COMPOSE_MODE" ]; then
-
-    # 把脚本算好的最终值交给 compose，避免它再用 .env 里的默认值
-    export IMAGE="$img"
-    export TAG="$tag"
-    export CONTAINER HOST_PORT DATA_DIR DOCKER_SOCK
-
-    # 账号密码同理：compose 文件里那两个 ${...:-默认值} 要看到本次算好的值
-    export NAV_USER NAV_PASSWORD SESSION_DAYS MAX_BODY TZ
-
-    run docker_compose_cmd up -d --remove-orphans
-
-    return 0
-
-  fi
-
+  # docker-compose.yml 现在是写死的最小版本（image / ports / volumes 都不做 ${} 插值），
+  # 交给它起容器就等于把本次算好的 --port、--data-dir、账号密码全丢掉，
+  # 所以脚本一律自己 docker run；compose 文件留给手工路线的用户。
   run docker_cmd rm -f "$CONTAINER" || true
 
   local sock=()
@@ -1536,7 +1517,7 @@ up_with() {
     -e "SESSION_DAYS=$SESSION_DAYS" \
     -e "MAX_BODY=$MAX_BODY" \
     -e "TZ=$TZ" \
-    -v "$DATA_DIR:/data" \
+    -v "$DATA_DIR:/app/data" \
     ${sock[@]+"${sock[@]}"} \
     "$ref"
 }
@@ -1776,7 +1757,7 @@ if [ -n "$PREV_ID" ]; then
   warn "新版本部署失败，旧版本回滚也没能通过探活"
   printf '\n'
   printf '旧版本镜像仍然在本机：%s:rollback\n' "$IMAGE"
-  printf '要退回它：docker tag %s:rollback %s，再用平时的方式起容器（docker compose up -d，或直接 ./deploy.sh --tar <上版本的包>）。\n' "$IMAGE" "$NEW_REF"
+  printf '要退回它：docker tag %s:rollback %s，再跑 ./deploy.sh --tar <上版本的包>。\n' "$IMAGE" "$NEW_REF"
   printf '\n'
 
 fi

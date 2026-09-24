@@ -2,7 +2,7 @@ FROM node:22-alpine
 
 ENV NODE_ENV=production \
     PORT=18086 \
-    DATA_DIR=/data
+    DATA_DIR=/app/data
 
 WORKDIR /app
 

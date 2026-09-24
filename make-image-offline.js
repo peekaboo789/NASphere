@@ -553,7 +553,7 @@ function sha256OfFile(p) {
 /* ---------------- 镜像配置 ---------------- */
 
 // Dockerfile 里那几条指令按同样顺序落到 config 上
-const APP_ENV = { NODE_ENV: 'production', PORT: '18086', DATA_DIR: '/data' };
+const APP_ENV = { NODE_ENV: 'production', PORT: '18086', DATA_DIR: '/app/data' };
 const HEALTHCHECK = {
   Test: ['CMD-SHELL', 'node -e "require(\'http\').get(\'http://127.0.0.1:\'+(process.env.PORT||18086)+\'/api/health\',r=>process.exit(r.statusCode===200?0:1)).on(\'error\',()=>process.exit(1))"'],
   Interval: 60000000000,
