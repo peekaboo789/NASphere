@@ -315,7 +315,7 @@ docker pull ghcr.io/peekaboo789/nasphere:1.0.0
 docker run -d \
   --name nasphere \
   --restart unless-stopped \
-  -p 18086:8080 \
+  -p 18086:18086 \
   -e NAV_USER='admin' \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/data" \
@@ -328,16 +328,16 @@ docker run -d \
 其中：
 
 ```text
-18086:8080
+18086:18086
 ```
 
 表示：
 
 ```text
-NAS 宿主机 18086 → NASphere 容器 8080
+NAS 宿主机 18086 → NASphere 容器 18086
 ```
 
-容器内部固定监听 `8080`（镜像里 `ENV PORT=8080`），冒号右边那一位不要跟着改。
+容器内部固定监听 `18086`（镜像里 `ENV PORT=18086`），冒号右边那一位不要跟着改。
 
 ---
 
@@ -1111,7 +1111,7 @@ dat/
 
 | 变量             | 默认值                           | 说明            |
 | -------------- | ----------------------------- | ------------- |
-| `PORT`         | `8080`                        | 容器内服务监听端口（对外端口用 `HOST_PORT`，默认 18086） |
+| `PORT`         | `18086`                       | 容器内服务监听端口（对外端口用 `HOST_PORT`，默认 18086） |
 | `HOST`         | `0.0.0.0`                     | 监听地址          |
 | `DATA_DIR`     | `/app/data`                   | 数据目录（镜像里 `ENV DATA_DIR`，宿主机的 `./data` 要挂到这个点） |
 | `NAV_USER`     | `admin`                       | 首次初始化账号       |

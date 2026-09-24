@@ -140,7 +140,7 @@ NASphere 一键安装 / 部署工具
   --source <压缩包>    用本地或内网的源码 tar.gz 安装，跳过 GitHub（NAS 没有 git 时用）
   --tar <文件>         加载 docker save 导出的镜像包，跳过构建
   --tag <标签>         镜像标签，默认使用 package.json version
-  --port <端口>        宿主机端口，默认 18086（容器内固定监听 8080）
+  --port <端口>        宿主机端口，默认 18086（容器内固定监听 18086）
   --data-dir <路径>    数据目录，默认 <项目目录>/data
   --dry-run            只显示操作，不执行、不落盘
   --uninstall          删除 NASphere 容器和镜像，但保留数据
@@ -1086,7 +1086,7 @@ log "项目目录：$ROOT"
 log "运行模式：$( [ "$LOCAL_MODE" = 1 ] && echo '本机已有项目' || echo '一键安装（源码本次下载）' )"
 log "镜像：$NEW_REF"
 log "容器：$CONTAINER"
-log "端口：$HOST_PORT → 容器内 8080"
+log "端口：$HOST_PORT → 容器内 18086"
 log "数据：$DATA_DIR"
 log "时区：$TZ"
 
@@ -1530,7 +1530,7 @@ up_with() {
     --name "$CONTAINER" \
     --restart unless-stopped \
     --init \
-    -p "$HOST_PORT:8080" \
+    -p "$HOST_PORT:18086" \
     -e "NAV_USER=$NAV_USER" \
     -e "NAV_PASSWORD=$NAV_PASSWORD" \
     -e "SESSION_DAYS=$SESSION_DAYS" \
@@ -1600,7 +1600,7 @@ probe_in_container() {
     "$CONTAINER" \
     node \
     -e \
-    "require('http').get('http://127.0.0.1:'+(process.env.PORT||8080)+'/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
+    "require('http').get('http://127.0.0.1:'+(process.env.PORT||18086)+'/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
     >/dev/null 2>&1
 }
 
