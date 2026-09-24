@@ -1,0 +1,18 @@
+# 运行时的本地数据与凭证（服务端会自己写 data/）
+data/
+.env
+
+# 出包产物：走 GitHub Release，不要提交进仓库
+dist/
+releases/
+.image-cache/
+
+# 开发机自测残留
+.demo-data/
+.pre-clean-backup/
+.sunpanel-import/
+.demo-server.log
+.mock-docker.log
+*.log
+
+node_modules/

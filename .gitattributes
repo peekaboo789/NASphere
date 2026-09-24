@@ -1,0 +1,5 @@
+# 目标是 Linux/NAS：文本一律以 LF 入库、LF 检出，否则 deploy.sh 在 NAS 上会因 \r 报 syntax error
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

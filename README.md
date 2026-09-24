@@ -1,845 +1,1366 @@
+<div align="center">
+
+<img src="public/img/logo.png" alt="NASphere" width="180">
+
 # NASphere
 
-> 🚀 一个轻量、现代、可自托管的 NAS / Docker 首页导航面板
-> 支持自定义应用、图标、壁纸、搜索引擎以及 Docker 容器管理。
+**自托管 NAS 主页 / 导航面板**
+
+自定义图标与壁纸 · 多引擎搜索 · 分组卡片拖拽 · Docker 容器组件 · 账号密码门禁 · 手机浏览器适配
+
+**零外部依赖：后端仅使用 Node.js 标准库，前端使用原生 HTML / CSS / JavaScript。**
+
+无需 `npm install`，无需前端构建，无需数据库。
+
+所有配置、账号信息和上传图片均保存在 NAS 本地，不依赖第三方账号或云服务。
 
 **作者：peekaboo789**
 
-GitHub：
-
-https://github.com/peekaboo789/NASphere
+</div>
 
 ---
 
-## ✨ 项目特点
+## ✨ 亮点
 
-NASphere 专为 NAS、家庭服务器和 Docker 环境设计。
+* **一条命令安装**
 
-### 🎨 个性化首页
+  * 支持 GitHub 一键安装
+  * 默认使用 GitHub 加速地址获取项目
+  * 自动下载源码、构建镜像、启动容器、健康检查
+  * 升级与重装不覆盖 `data/`，首装随机生成初始密码
+  * 部署失败自动回滚
+* **零构建依赖**
 
-* 自定义壁纸
-* 自定义应用图标
-* 自定义应用名称
-* 自定义应用地址
-* 自定义应用排序
-* 自定义首页布局
+  * 不需要 `npm install`
+  * 不需要 Node.js 构建前端
+  * Docker 镜像直接运行 Node.js
+* **一屏式 NAS 服务门户**
 
-### 🔎 搜索
+  * 搜索
+  * 时钟
+  * 天气
+  * 分组应用
+  * Docker 容器状态
+  * 便签
+  * 待办
+* **高度自定义**
 
-支持自定义搜索引擎，可以根据自己的使用习惯设置：
+  * 图标
+  * 壁纸
+  * 搜索引擎
+  * 字体
+  * 图标尺寸
+  * 卡片间距
+  * 内外网地址
+* **Docker 容器组件**
 
-* 百度
-* Bing
-* Google
-* 必应
-* 自定义搜索地址
+  * CPU
+  * 内存
+  * 上 / 下行速度
+  * 运行状态
+  * 启动 / 停止 / 重启
+  * 自由拖动和调整尺寸
+* **数据完全本地化**
 
-### 🐳 Docker
+  * `data/` 即完整运行数据
+  * 配置可以直接编辑
+  * 支持导出 / 导入
+  * 支持自动备份
+* **手机直接使用**
 
-NASphere 可以连接宿主机 Docker Socket，用于显示 Docker 项目信息。
+  * 不需要单独的移动端页面
+  * 自动适配触摸设备和窄屏
+* **深色优先**
+
+  * 默认深色界面
+  * 内置 10 套渐变壁纸
+  * 支持图片、上传、必应每日壁纸
+
+---
+
+# 🚀 快速开始
+
+## 方式一：一条命令安装
+
+如果 NAS 可以访问 GitHub，推荐直接执行：
+
+```bash
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | bash
+```
+
+脚本会自动：
+
+```text
+下载 NASphere 源码
+      ↓
+检查 Docker
+      ↓
+构建 NASphere 镜像
+      ↓
+创建 / 更新容器
+      ↓
+健康检查
+      ↓
+输出访问地址
+```
+
+默认：
+
+```text
+项目目录：/vol2/1000/dockers/NASphere
+容器名称：nasphere
+宿主端口：18086
+数据目录：./data
+```
+
+换安装目录或端口（管道执行必须带 `bash -s --` 才传得进参数）：
+
+```bash
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | \
+  bash -s -- --root /volume1/docker/NASphere --port 9000
+```
+
+首次安装如果没有指定密码，会随机生成一个，只打印一次，并留档在项目目录的 `.env`。
+
+同一个目录再执行一次就是原地升级：`data/` 和 `.env` 原样保留，壁纸、图标、配置、账号都不会丢。
+
+安装完成后访问：
+
+```text
+http://<NAS-IP>:18086
+```
 
 例如：
 
-* 项目名称
-* 容器数量
-* 运行状态
-* 创建时间
-* 项目路径
+```text
+http://192.168.8.99:18086
+```
 
-因此可以直接在 NAS 首页查看 Docker 项目状态。
+> 如果你的 NAS Docker 无法正常拉取 `node:22-alpine`，请先解决 Docker 镜像源问题，或者使用下面的离线镜像方式。
 
-### 💾 数据持久化
+---
 
-所有 NASphere 数据保存到：
+## 方式二：已有源码目录
+
+如果已经下载了 NASphere：
+
+```bash
+cd /vol2/1000/dockers/NASphere
+
+cp .env.example .env
+
+chmod +x deploy.sh make-image.sh
+
+./deploy.sh
+```
+
+脚本旁边就有 `Dockerfile` 和 `server/index.js` 时自动走本机模式，不会再下载源码。
+
+部署脚本会自动：
+
+1. 检查 Docker
+2. 读取版本号
+3. 备份 `data/config.json`
+4. 备份 `data/auth.json`
+5. 构建 Docker 镜像
+6. 启动 NASphere
+7. 检查 `/api/health`
+8. 启动失败自动回滚旧镜像
+
+---
+
+# 🔄 更新 NASphere
+
+在项目目录里执行：
+
+```bash
+./deploy.sh --update
+```
+
+会先从 GitHub 拉最新源码，再重新构建部署。
+
+一键安装过的那条命令也可以直接重跑。
+
+项目数据默认保存在：
 
 ```text
 ./data
 ```
 
-删除容器不会删除数据。
-
-重新部署后继续挂载 `./data` 即可恢复配置。
-
----
-
-# 🚀 一、推荐部署方式
-
-NASphere 支持通过单个 Docker Compose 文件完成部署。
-
-用户不需要：
-
-* Git Clone
-* 下载源码
-* 下载压缩包
-* 手动安装 Node.js
-* 手动安装 Git
-* 手动构建 Dockerfile
-
-只需要：
+更新程序代码不会删除：
 
 ```text
-docker-compose.yml
+config.json
+auth.json
+uploads/
+.env
 ```
 
-然后执行一条命令。
+因此正常升级不会影响已经设置好的主页，登录账号密码也不变。
 
 ---
 
-# 📦 二、创建部署目录
+# 🔐 首次登录
 
-在 NAS 上创建目录：
-
-```bash
-mkdir -p /vol2/1000/dockers/NASphere
-cd /vol2/1000/dockers/NASphere
-```
-
----
-
-# 📝 三、创建 docker-compose.yml
-
-创建：
-
-```bash
-nano docker-compose.yml
-```
-
-粘贴以下完整内容：
-
-```yaml
-services:
-  nasphere:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM m.daocloud.io/docker.io/library/node:22-alpine
-
-        RUN apk add --no-cache git
-
-        WORKDIR /app
-
-        RUN git clone --depth 1 \
-            https://gh-proxy.com/https://github.com/peekaboo789/NASphere.git \
-            /tmp/nasphere \
-            && cp -a /tmp/nasphere/server /app/server \
-            && cp -a /tmp/nasphere/public /app/public \
-            && cp /tmp/nasphere/package.json /app/package.json \
-            && rm -rf /tmp/nasphere
-
-        ENV NODE_ENV=production
-        ENV PORT=8080
-        ENV DATA_DIR=/data
-
-        RUN mkdir -p /data \
-            && chmod 700 /data \
-            && npm install --omit=dev
-
-        EXPOSE 8080
-
-        HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-          CMD node -e "require('http').get('http://127.0.0.1:8080/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
-
-        CMD ["node", "server/index.js"]
-
-    container_name: nasphere
-
-    restart: unless-stopped
-    init: true
-
-    # Docker Socket 所属 GID
-    group_add:
-      - "994"
-
-    ports:
-      - "8080:8080"
-
-    environment:
-      TZ: Asia/Shanghai
-
-      # NASphere 登录账号
-      NAV_USER: admin
-      NAV_PASSWORD: admin123
-
-      SESSION_DAYS: "30"
-      MAX_BODY: "8388608"
-
-      # Docker API
-      DOCKER_HOST: unix:///var/run/docker.sock
-
-    volumes:
-      # NASphere 数据
-      - ./data:/data
-
-      # Docker API
-      - /var/run/docker.sock:/var/run/docker.sock
-
-    # 强制本地构建，不拉取 nasphere 镜像
-    pull_policy: build
-```
-
-保存：
+用 `deploy.sh` 一键安装、且没有预先指定密码时，初始密码随机生成：
 
 ```text
-Ctrl + O
-Enter
-Ctrl + X
+用户名：admin
+密码　：<本次随机生成的 16 位密码>
 ```
+
+这个密码只在安装输出里打印一次，留档位置：
+
+```text
+项目目录/.env
+```
+
+权限 `600`，忘记密码时在这里查。
+
+**第一次登录后请立即进入：**
+
+```text
+设置 → 安全
+```
+
+修改账号和密码。
+
+也可以在第一次部署之前通过 `.env` 指定，这样首装就不再生成随机密码：
+
+```env
+NAV_USER=admin
+NAV_PASSWORD=你的密码
+```
+
+注意：
+
+`NAV_USER` / `NAV_PASSWORD` 主要用于初始化 `auth.json`。
+
+如果 `data/auth.json` 已经存在，修改环境变量不会直接覆盖现有账号密码。
+
+> 直接 `docker compose up -d` 且没有 `.env` 时用的是镜像内置默认密码，手动部署前先写好 `.env`。
 
 ---
 
-# ▶️ 四、一条命令启动
+# 📦 Docker Compose
 
-在 `docker-compose.yml` 所在目录执行：
+如果希望手动使用 Docker Compose：
 
 ```bash
+cp .env.example .env
 docker compose up -d --build
 ```
 
-第一次部署会自动完成：
+默认访问：
 
 ```text
-Docker Compose
-     │
-     ▼
-读取内嵌 Dockerfile
-     │
-     ▼
-DaoCloud 获取 Node 22 Alpine
-     │
-     ▼
-安装 Git
-     │
-     ▼
-gh-proxy.com
-     │
-     ▼
-GitHub / peekaboo789 / NASphere
-     │
-     ▼
-下载最新 NASphere 源码
-     │
-     ▼
-构建 Docker 镜像
-     │
-     ▼
-创建 nasphere 容器
-     │
-     ▼
-启动 NASphere
+http://<NAS-IP>:18086
 ```
 
----
+修改端口：
 
-# 🌐 五、访问 NASphere
-
-部署成功以后：
-
-```text
-http://你的NAS_IP:8080
-```
-
-例如：
-
-```text
-http://192.168.8.99:8080
-```
-
-默认账号：
-
-```text
-admin
-```
-
-默认密码：
-
-```text
-admin123
-```
-
-第一次登录以后建议立即修改密码。
-
----
-
-# 🐳 六、Docker 项目显示
-
-NASphere 使用：
-
-```text
-/var/run/docker.sock
-```
-
-连接宿主机 Docker。
-
-Compose 中已经配置：
-
-```yaml
-volumes:
-  - /var/run/docker.sock:/var/run/docker.sock
-```
-
-并加入：
-
-```yaml
-group_add:
-  - "994"
-```
-
-这是针对 Docker Socket 所属 GID 为 `994` 的环境。
-
-可以通过：
-
-```bash
-ls -l /var/run/docker.sock
-```
-
-查看：
-
-```text
-root 994
-```
-
-如果你的 NAS 上 Docker Socket GID 不是 `994`，需要修改：
-
-```yaml
-group_add:
-  - "你的Docker Socket GID"
-```
-
-例如：
-
-```yaml
-group_add:
-  - "999"
-```
-
----
-
-# ⚠️ 七、Docker Socket 安全说明
-
-NASphere 使用 Docker Socket 是为了读取 Docker 项目和容器状态。
-
-但是：
-
-```text
-/var/run/docker.sock
-```
-
-属于高权限接口。
-
-因此不要把 NASphere 直接暴露到公网。
-
-推荐：
-
-```text
-互联网
-   │
-   ▼
-Cloudflare / 反向代理
-   │
-   ▼
-NASphere
-   │
-   ▼
-Docker Socket
-```
-
-如果只是家庭 LAN 使用，可以直接：
-
-```text
-192.168.x.x:8080
-```
-
----
-
-# 🔄 八、更新 NASphere
-
-由于源码是在构建阶段通过 GitHub 获取，因此更新非常简单。
-
-进入目录：
-
-```bash
-cd /vol2/1000/dockers/NASphere
+```env
+HOST_PORT=9000
 ```
 
 然后：
 
 ```bash
-docker compose build --no-cache
-docker compose up -d
-```
-
-或者直接：
-
-```bash
 docker compose up -d --build
 ```
-
-如果需要确保重新从 GitHub 获取最新代码，可以使用：
-
-```bash
-docker compose build --no-cache
-docker compose up -d
-```
-
----
-
-# 🛑 九、停止 NASphere
-
-```bash
-docker compose down
-```
-
-这不会删除：
-
-```text
-./data
-```
-
-所以 NASphere 的数据仍然保留。
-
----
-
-# ▶️ 十、重新启动
-
-```bash
-docker compose up -d
-```
-
----
-
-# 🗑️ 十一、彻底删除 NASphere
-
-删除容器：
-
-```bash
-docker compose down
-```
-
-删除构建出来的镜像：
-
-```bash
-docker image rm nasphere-nasphere
-```
-
-如果还需要删除数据：
-
-```bash
-rm -rf ./data
-```
-
-⚠️ 删除 `./data` 会清除 NASphere 保存的数据。
-
----
-
-# 🔍 十二、检查运行状态
-
-查看容器：
-
-```bash
-docker ps -a --filter name=nasphere
-```
-
-正常应该看到：
-
-```text
-Up ...
-```
-
-查看日志：
-
-```bash
-docker logs --tail 100 nasphere
-```
-
-实时查看：
-
-```bash
-docker logs -f nasphere
-```
-
----
-
-# ❤️ 十三、健康检查
-
-NASphere 提供：
-
-```text
-/api/health
-```
-
-可以测试：
-
-```bash
-curl http://127.0.0.1:8080/api/health
-```
-
-如果服务正常，应返回 HTTP 200。
-
-也可以：
-
-```bash
-docker inspect nasphere --format '{{.State.Health.Status}}'
-```
-
-正常情况下：
-
-```text
-healthy
-```
-
----
-
-# 🧪 十四、Docker Socket 测试
-
-如果 NASphere 页面显示：
-
-```text
-连不上 Docker（unix:///var/run/docker.sock）
-```
-
-首先检查：
-
-```bash
-ls -l /var/run/docker.sock
-```
-
-例如：
-
-```text
-srw-rw---- 1 root 994 /var/run/docker.sock
-```
-
-然后检查容器：
-
-```bash
-docker exec nasphere sh -c 'ls -l /var/run/docker.sock'
-```
-
-如果能看到：
-
-```text
-srw-rw---- 0 root 994 /var/run/docker.sock
-```
-
-说明 Socket 已经正确挂载。
-
-再测试：
-
-```bash
-docker exec nasphere sh -c 'node -e "const fs=require(\"fs\"); try { fs.accessSync(\"/var/run/docker.sock\", fs.constants.R_OK|fs.constants.W_OK); console.log(\"Docker Socket OK\") } catch(e) { console.error(e.message); process.exit(1) }"'
-```
-
-正常输出：
-
-```text
-Docker Socket OK
-```
-
----
-
-# 🛠️ 十五、修改端口
-
-默认：
-
-```yaml
-ports:
-  - "8080:8080"
-```
-
-如果 8080 已经被占用，可以改成：
-
-```yaml
-ports:
-  - "5666:8080"
-```
-
-那么访问：
-
-```text
-http://192.168.8.99:5666
-```
-
-容器内部仍然使用：
-
-```text
-8080
-```
-
----
-
-# 🔐 十六、修改登录密码
-
-修改：
-
-```yaml
-environment:
-  NAV_USER: admin
-  NAV_PASSWORD: admin123
-```
-
-例如：
-
-```yaml
-environment:
-  NAV_USER: admin
-  NAV_PASSWORD: YourStrongPassword
-```
-
-修改以后需要重新创建容器：
-
-```bash
-docker compose up -d --build
-```
-
----
-
-# 💾 十七、数据目录
-
-默认：
-
-```yaml
-volumes:
-  - ./data:/data
-```
-
-也就是说：
-
-```text
-NASphere/
-├── docker-compose.yml
-└── data/
-```
-
-NASphere 的持久化数据保存在：
-
-```text
-/vol2/1000/dockers/NASphere/data
-```
-
-这样即使删除：
-
-```text
-nasphere
-```
-
-容器重新创建以后数据仍然存在。
-
----
-
-# 🌏 十八、为什么使用 gh-proxy
-
-NASphere 的源码仓库：
-
-```text
-https://github.com/peekaboo789/NASphere
-```
-
-构建时使用：
-
-```text
-https://gh-proxy.com/https://github.com/peekaboo789/NASphere.git
-```
-
-因此用户不需要提前：
-
-```bash
-git clone
-```
-
-也不需要手动下载源码。
-
-源码始终以 GitHub 仓库为准。
-
----
-
-# 📦 十九、为什么使用 DaoCloud Node 镜像
-
-基础镜像：
-
-```text
-m.daocloud.io/docker.io/library/node:22-alpine
-```
-
-用于获取：
-
-```text
-Node.js 22
-Alpine Linux
-```
-
-这样可以避开部分 Docker Hub 镜像访问问题。
-
-如果你的 Docker 环境可以正常访问 Docker Hub，也可以将：
-
-```dockerfile
-FROM m.daocloud.io/docker.io/library/node:22-alpine
-```
-
-修改为：
-
-```dockerfile
-FROM node:22-alpine
-```
-
----
-
-# 🧩 二十、整个项目的部署结构
-
-最终结构：
-
-```text
-NAS
-│
-├── /vol2/1000/dockers/NASphere
-│   │
-│   ├── docker-compose.yml
-│   │
-│   └── data
-│
-└── Docker
-     │
-     ├── nasphere
-     │
-     ├── moviepilot
-     ├── openclaw
-     ├── cc-our-story
-     ├── qb
-     ├── transmission
-     └── ...
-```
-
-NASphere 通过：
-
-```text
-Docker Socket
-```
-
-读取：
-
-```text
-Docker
-  ↓
-Compose 项目
-  ↓
-容器
-  ↓
-运行状态
-```
-
----
-
-# 🚀 二十一、最简部署
-
-如果已经准备好：
-
-```text
-docker-compose.yml
-```
-
-那么以后用户只需要：
-
-```bash
-docker compose up -d --build
-```
-
-即可。
 
 访问：
 
 ```text
-http://NAS-IP:8080
+http://<NAS-IP>:9000
 ```
 
 ---
 
-# 📌 二十二、注意事项
+# 🐳 Docker Run
 
-### 1. Docker Compose 版本
-
-这个方案使用：
-
-```yaml
-dockerfile_inline:
-```
-
-需要较新的 Docker Compose。
-
-建议：
+也可以直接运行：
 
 ```bash
-docker compose version
+docker build -t nasphere:1.0.0 .
 ```
 
-确认版本。
+然后：
 
-### 2. Docker Socket
-
-如果 Docker Socket 的 GID 与：
-
-```yaml
-group_add:
-  - "994"
+```bash
+docker run -d \
+  --name nasphere \
+  --restart unless-stopped \
+  -p 18086:18086 \
+  -e NAV_USER='admin' \
+  -e NAV_PASSWORD='你自己的密码' \
+  -v "$(pwd)/data:/data" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  nasphere:1.0.0
 ```
 
-不同，需要修改。
-
-### 3. 网络
-
-构建过程中需要访问：
+其中：
 
 ```text
-m.daocloud.io
+18086:18086
+```
+
+表示：
+
+```text
+NAS 宿主机 18086 → NASphere 容器 18086
+```
+
+容器内部固定监听 `18086`（镜像里 `ENV PORT=18086`），冒号右边那一位不要跟着改。
+
+---
+
+# 📦 离线部署
+
+如果 NAS 无法访问 Docker Hub，可以在其他 Docker 环境制作离线镜像：
+
+```bash
+./make-image.sh
+```
+
+生成：
+
+```text
+dist/nasphere-<版本>.tar.gz
+dist/nasphere-<版本>.sha256
+```
+
+将镜像包传到 NAS 后：
+
+```bash
+./deploy.sh --tar dist/nasphere-1.0.0.tar.gz
+```
+
+脚本会：
+
+```text
+加载镜像
+ ↓
+识别镜像版本
+ ↓
+重新标记
+ ↓
+备份 data
+ ↓
+启动容器
+ ↓
+健康检查
+```
+
+NAS 连 GitHub 也上不了时，改用本地源码包安装：
+
+```bash
+./deploy.sh --source /volume1/docker/NASphere-src.tar.gz
+```
+
+---
+
+# ✨ 功能
+
+## 🔎 搜索
+
+内置：
+
+* 百度
+* Google
+* Bing
+* DuckDuckGo
+* 搜狗
+
+支持：
+
+* 增加自定义搜索引擎
+* 删除搜索引擎
+* `{query}` 参数
+* 输入网址直接访问
+* 浏览器记住当前搜索引擎
+
+例如：
+
+```text
+https://www.google.com/search?q={query}
+```
+
+---
+
+# 🖼️ 图标
+
+支持五种图标来源：
+
+* Emoji
+* 网站 favicon
+* 图片 URL
+* 上传图片
+* 首字母
+
+上传支持 png / jpeg / gif / webp / avif / svg / ico，单张不超过 5MB。
+
+favicon 获取失败时自动使用首字母。
+
+网址应用默认不绘制传统卡片边框：
+
+> 图标就是视觉主体。
+
+分组面板负责提供整体玻璃层次，避免主页被大量小卡片切割。
+
+---
+
+# 🎨 外观
+
+支持：
+
+* 深色
+* 浅色
+* 自动
+* 自定义强调色
+* 图标大小
+* 字体大小
+* 卡片行距
+* 图标左右布局
+* 壁纸
+* 壁纸模糊
+* 壁纸压暗
+* 壁纸填充方式
+
+内置渐变：
+
+```text
+midnight
+graphite
+dusk
+aurora
+ocean
+forest
+sunset
+grape
+slate
+paper
+```
+
+默认：
+
+```text
+主题：dark
+强调色：#7c8cff
+壁纸：midnight
+```
+
+---
+
+# 🖼️ 壁纸
+
+支持：
+
+* 内置渐变
+* 图片 URL
+* 上传到 NAS
+* 必应每日壁纸
+* 无壁纸
+
+支持：
+
+```text
+cover
+stretch
+contain
 ```
 
 以及：
 
 ```text
-gh-proxy.com
+模糊 0–30px
+压暗 0–90%
 ```
 
-如果其中一个无法访问，Docker 构建会失败。
+登录页面会自动使用主页当前壁纸。
 
-### 4. 数据
+如果使用必应每日壁纸：
 
-不要随意删除：
-
-```text
-./data
-```
-
-否则 NASphere 保存的配置可能丢失。
-
-### 5. 公网访问
-
-不建议直接把：
-
-```text
-8080
-```
-
-暴露到公网。
-
-NASphere 使用 Docker Socket，应该尽量限制访问范围。
+* NAS 负责获取和缓存
+* 浏览器无需直接访问必应
+* 登录页只使用 NAS 已缓存的壁纸地址
 
 ---
 
-# 📄 License
+# 🖱️ 卡片拖拽
 
+网址应用不需要先进入编辑模式。
+
+鼠标：
+
+```text
+按住约 0.5 秒
+↓
+拖动
+↓
+松开
+```
+
+即可重新排序。
+
+拖到其他分组时：
+
+```text
+原分组
+   ↓
+拖动
+   ↓
+目标分组
+```
+
+应用会直接进入目标分组。
+
+触摸设备同样支持长按拖动。
+
+---
+
+# 📦 Docker 容器组件
+
+NASphere 可以将 Docker 容器直接显示在主页。
+
+每个组件拥有独立：
+
+```text
+x
+y
+w
+h
+```
+
+支持自由摆放。
+
+显示：
+
+```text
+容器名称
+运行状态
+镜像
+CPU
+内存
+上传速度
+下载速度
+```
+
+默认每 3 秒刷新一次。
+
+停止的容器不会持续读取 stats。
+
+---
+
+# ⚙️ Docker 容器操作
+
+主页右键容器组件可以：
+
+```text
+打开
+复制链接
+启动容器
+停止容器
+重启容器
+移除组件
+```
+
+只允许操作：
+
+```text
+data/config.json
+```
+
+中明确加入 `docker.items` 的容器。
+
+允许动作只有：
+
+```text
+start
+stop
+restart
+```
+
+不提供：
+
+```text
+docker rm
+docker exec
+docker inspect
+```
+
+等高权限操作接口。
+
+---
+
+# ⚠️ Docker Socket 安全说明
+
+如果挂载：
+
+```text
+/var/run/docker.sock
+```
+
+NASphere 容器实际上拥有很高的 Docker 控制权限。
+
+Docker Socket 本身可以间接获得宿主机级别控制能力。
+
+因此：
+
+* 不建议直接暴露 NASphere 到公网
+* 建议只允许可信用户登录
+* 公网访问建议再增加反向代理认证
+* 如果不需要 Docker 容器组件，可以不挂载 Docker Socket
+
+不挂载 Socket：
+
+```text
+NASphere 主页
+      ↓
+正常使用
+```
+
+只是：
+
+```text
+Docker 组件
+      ↓
+Docker 不可用
+```
+
+不会影响搜索、图标、壁纸、分组等其他功能。
+
+---
+
+# 📂 分组
+
+分组支持：
+
+* 新建
+* 删除
+* 修改名称
+* 修改图标
+* 调整顺序
+* 固定内网
+* 固定外网
+
+分组标题：
+
+```text
+20px
+```
+
+固定大小，不跟随卡片字体设置变化。
+
+点击分组名称即可折叠 / 展开。
+
+---
+
+# 🌐 内网 / 外网
+
+每个网址应用可以设置：
+
+```text
+外网网址
+内网网址
+```
+
+例如：
+
+```json
+{
+  "title": "NAS",
+  "url": "https://nas.example.com",
+  "urlLan": "http://192.168.8.99:5000"
+}
+```
+
+右上角可以切换：
+
+```text
+内网
+外网
+```
+
+分组还可以固定：
+
+```json
+"netMode": "lan"
+```
+
+或者：
+
+```json
+"netMode": "wan"
+```
+
+固定后的分组不会受到全局开关影响。
+
+---
+
+# 📱 手机浏览器
+
+NASphere 不需要单独的移动端页面。
+
+手机浏览器直接访问：
+
+```text
+http://<NAS-IP>:18086
+```
+
+即可。
+
+自动适配：
+
+* 手机
+* 平板
+* 桌面
+* 触摸屏
+* 窄屏
+
+移动端自动：
+
+* 调整卡片布局
+* 合并便签 / 待办
+* 调整设置窗口高度
+* 放大触摸按钮
+* 禁止拖动 Docker 组件坐标
+* 适配 iPhone 输入框
+* 适配刘海与底部安全区域
+
+---
+
+# 🧩 小组件
+
+默认开启：
+
+* 时钟
+* 天气
+
+可选：
+
+* 便签
+* 待办
+
+天气使用：
+
+```text
+Open-Meteo
+```
+
+无需 API Key。
+
+可以搜索城市并设置天气位置。
+
+---
+
+# 💾 数据
+
+NASphere 的运行数据全部位于：
+
+```text
+data/
+```
+
+目录。
+
+主要包括：
+
+```text
+data/
+├── config.json
+├── auth.json
+├── .secret
+├── .deploy-backup/
+└── uploads/
+```
+
+因此：
+
+> **备份整个 `data/` 目录，就等于备份整个 NASphere。**
+
+---
+
+# 📝 直接编辑配置
+
+可以直接编辑：
+
+```text
+data/config.json
+```
+
+例如：
+
+```json
+{
+  "groups": [
+    {
+      "name": "NAS 服务",
+      "icon": "🗄️",
+      "links": [
+        {
+          "title": "Jellyfin",
+          "url": "https://media.example.com",
+          "urlLan": "http://192.168.8.99:8096",
+          "icon": "🎬"
+        }
+      ]
+    }
+  ]
+}
+```
+
+支持字段别名：
+
+```text
+title / name / label
+url / href / link
+urlLan / lanUrl / url_lan
+icon / emoji / img
+desc / note
+```
+
+缺少协议时自动补：
+
+```text
+http://
+```
+
+---
+
+# 🔧 配置限制
+
+服务端会自动进行校验。
+
+主要限制：
+
+```text
+分组：120
+每组链接：300
+Docker 组件：60
+搜索引擎：40
+待办：300
+```
+
+字符串限制：
+
+```text
+分组名称：60 字
+标题：200 字
+备注：200 字
+便签：20000 字
+网址：2000 字
+```
+
+Docker 组件：
+
+```text
+宽度：120–900px
+高度：64–600px
+X：0–4000
+Y：0–4000
+```
+
+非法网址协议，例如：
+
+```text
+javascript:
+```
+
+会被拒绝。
+
+---
+
+# 🔐 安全
+
+NASphere 使用：
+
+* scrypt 密码哈希
+* HMAC 会话 Cookie
+* 登录失败限流
+* CSP
+* 上传类型白名单
+* 上传大小限制
+* 统一登录失败提示
+
+密码不会以明文保存。
+
+`auth.json` 中保存的是：
+
+```text
+scrypt hash
+```
+
+而不是原始密码。
+
+登录接口不会区分：
+
+```text
+账号不存在
+```
+
+和：
+
+```text
+密码错误
+```
+
+统一返回：
+
+```text
+账号或密码不正确
+```
+
+---
+
+# 💾 备份与迁移
+
+最简单的方法：
+
+```bash
+cp -a data /你的备份位置/
+```
+
+迁移到另一台 NAS：
+
+```text
+NASphere
++
+data/
+```
+
+即可。
+
+如果使用上传图片，还需要保留：
+
+```text
+data/uploads/
+```
+
+否则上传的图标和壁纸会丢失。
+
+---
+
+# 🔄 自动备份
+
+每次执行：
+
+```bash
+./deploy.sh
+```
+
+都会自动备份：
+
+```text
+data/config.json
+data/auth.json
+```
+
+备份位置：
+
+```text
+data/.deploy-backup/
+```
+
+默认保留最近：
+
+```text
+5
+```
+
+份。
+
+可以通过：
+
+```env
+KEEP_BACKUPS=10
+```
+
+修改数量。
+
+---
+
+# 🧹 恢复初始配置
+
+「设置 → 数据」提供：
+
+```text
+清空为初始配置
+```
+
+会清除：
+
+* 分组
+* 应用
+* Docker 组件
+* 便签
+* 待办
+
+同时恢复：
+
+* 默认外观
+* 默认搜索引擎
+* 默认天气设置
+
+**操作不可撤销。**
+
+建议先：
+
+```text
+导出配置 JSON
+```
+
+或者备份：
+
+```text
+data/
+```
+
+---
+
+# ⌨️ 快捷键
+
+| 快捷键        | 功能          |
+| ---------- | ----------- |
+| `/`        | 聚焦搜索        |
+| `Ctrl + K` | 聚焦搜索        |
+| `Cmd + K`  | 聚焦搜索        |
+| `E`        | 编辑模式        |
+| `,`        | 打开设置        |
+| `Esc`      | 关闭弹窗 / 取消操作 |
+
+---
+
+# 📁 项目结构
+
+```text
+NASphere/
+├── Dockerfile
+├── DEPLOY.md
+├── README.md
+├── docker-compose.yml
+├── deploy.sh
+├── make-image.sh
+├── make-image-offline.js
+├── .env.example
+├── package.json
+├── server/
+│   └── index.js
+├── public/
+│   ├── index.html
+│   ├── img/
+│   │   ├── logo.png
+│   │   └── favicon.png
+│   ├── css/
+│   │   └── styles.css
+│   └── js/
+│       ├── store.js
+│       ├── widgets.js
+│       └── app.js
+└── data/
+    ├── config.json
+    ├── auth.json
+    ├── .secret
+    ├── .deploy-backup/
+    └── uploads/
+```
+
+---
+
+# 🛠️ 环境变量
+
+## NASphere 服务
+
+| 变量             | 默认值                           | 说明            |
+| -------------- | ----------------------------- | ------------- |
+| `PORT`         | `18086`                       | 容器内服务监听端口（对外端口用 `HOST_PORT`，默认 18086） |
+| `HOST`         | `0.0.0.0`                     | 监听地址          |
+| `DATA_DIR`     | `/data`                       | 数据目录          |
+| `NAV_USER`     | `admin`                       | 首次初始化账号       |
+| `NAV_PASSWORD` | `admin123`                    | 首次初始化密码，`deploy.sh` 首装会随机生成并写进 `.env` |
+| `SESSION_DAYS` | `30`                          | 登录有效期         |
+| `MAX_BODY`     | `8388608`                     | 请求体上限         |
+| `DOCKER_HOST`  | `unix:///var/run/docker.sock` | Docker API 地址 |
+
+## deploy.sh / Compose
+
+| 变量             | 默认值                    | 说明            |
+| -------------- | ---------------------- | ------------- |
+| `HOST_PORT`    | `18086`                | NAS 宿主机端口     |
+| `IMAGE`        | `local/nasphere`       | Docker 镜像     |
+| `TAG`          | package.json version   | 镜像标签          |
+| `CONTAINER`    | `nasphere`             | 容器名称          |
+| `DATA_DIR`     | `./data`               | NASphere 数据目录 |
+| `HEALTH_WAIT`  | `40`                   | 健康检查等待时间      |
+| `KEEP_BACKUPS` | `5`                    | 保留备份数量        |
+| `DOCKER_SOCK`  | `/var/run/docker.sock` | Docker Socket |
+| `INSTALL_ROOT` | `/vol2/1000/dockers/NASphere` | 一键安装时源码装到哪里，等价于 `--root` |
+| `GITHUB_REPO`  | `https://github.com/peekaboo789/NASphere.git` | 源码地址，用自己的 fork 就改它 |
+| `GITHUB_PROXY` | `https://gh-proxy.com` | GitHub 加速前缀，留空则只走直连 |
+| `BRANCH`       | `main`                 | 拉取的分支         |
+
+`deploy.sh` 还会读 `NAV_USER`、`NAV_PASSWORD`、`SESSION_DAYS`、`MAX_BODY`、`TZ`，生效顺序：
+
+```text
+命令行 > 环境变量 > .env > 默认值
+```
+
+---
+
+# 🚀 deploy.sh 参数
+
+```bash
+./deploy.sh --port 9000
+```
+
+修改宿主端口。
+
+```bash
+./deploy.sh --update
+```
+
+从 GitHub 拉最新源码后重新部署。
+
+```bash
+./deploy.sh --root /volume1/docker/NASphere
+```
+
+一键安装时指定源码装到哪里。
+
+```bash
+./deploy.sh --data-dir /volume1/docker/nasphere/data
+```
+
+修改数据目录。
+
+```bash
+./deploy.sh --tag 1.2.0
+```
+
+指定镜像版本。
+
+```bash
+./deploy.sh --dry-run
+```
+
+只显示操作，不执行。
+
+```bash
+./deploy.sh --tar dist/nasphere-1.2.0.tar.gz
+```
+
+使用离线镜像。
+
+```bash
+./deploy.sh --source /tmp/NASphere-src.tar.gz
+```
+
+使用本地源码包安装，跳过 GitHub。
+
+```bash
+./deploy.sh --uninstall
+```
+
+删除容器和镜像，`data/` 会原样保留。
+
+---
+
+# 🧪 本地开发
+
+本地 Node.js：
+
+```text
+Node.js >= 18
+```
+
+启动：
+
+```bash
+DATA_DIR=./data PORT=18080 node server/index.js
+```
+
+访问：
+
+```text
+http://127.0.0.1:18080
+```
+
+检查代码：
+
+```bash
+npm run check
+```
+
+不需要：
+
+```bash
+npm install
+```
+
+---
+
+# 🐳 Docker 基础镜像
+
+NASphere 使用：
+
+```dockerfile
+node:22-alpine
+```
+
+项目本身没有第三方 npm 运行依赖。
+
+如果 Docker Hub 无法访问，可以提前准备基础镜像，例如：
+
+```bash
+docker pull docker.m.daocloud.io/library/node:22-alpine
+```
+
+然后：
+
+```bash
+docker tag docker.m.daocloud.io/library/node:22-alpine node:22-alpine
+```
+
+再执行：
+
+```bash
+docker build -t local/nasphere:latest .
+```
+
+---
+
+# 🌐 反向代理
+
+NASphere 本身不内置 HTTPS。
+
+如果需要：
+
+```text
+https://nas.example.com
+```
+
+建议使用：
+
+```text
+Nginx
+Caddy
+Traefik
+```
+
+等反向代理提供 TLS。
+
+例如：
+
+```text
+浏览器
+  ↓
+HTTPS :443
+  ↓
+反向代理
+  ↓
+NASphere :18086
+```
+
+NASphere 静态资源和 API 都使用根路径：
+
+```text
+/
+├── css/
+├── js/
+├── img/
+└── api/
+```
+
+因此反向代理建议将整个站点转发到：
+
+```text
+http://127.0.0.1:18086/
+```
+
+而不是只代理：
+
+```text
+/nav/
+```
+
+---
+
+# ⚠️ 已知边界
+
+### Docker Socket
+
+挂载：
+
+```text
+/var/run/docker.sock
+```
+
+意味着 NASphere 容器拥有很高的 Docker 控制权限。
+
+因此：
+
+**不要直接把 NASphere 暴露到公网。**
+
+如果不需要 Docker 组件，可以不挂载 Docker Socket。
+
+---
+
+### 天气
+
+天气使用：
+
+```text
+Open-Meteo
+```
+
+需要浏览器所在网络可以访问相关服务。
+
+天气不可用时不会影响 NASphere 其他功能。
+
+---
+
+### Google
+
+Google 搜索是否可用取决于 NAS 所在网络的出口环境。
+
+---
+
+### 多人同时编辑
+
+NASphere 当前是：
+
+```text
+单实例
+```
+
+设计。
+
+如果多个用户同时修改配置，后保存的修改可能覆盖先保存的修改。
+
+家庭 NAS 场景下一般只建议少量可信用户使用。
+
+---
+
+# 📜 License
+
+NASphere 使用：
+
+```text
 MIT License
+```
 
-Copyright (c) peekaboo789
-
----
-
-# 👤 Author
+作者：
 
 **peekaboo789**
 
-NASphere —— 为 NAS 打造一个简单、漂亮、自由可控的首页。
+---
 
-```
+<div align="center">
 
-这份说明可以直接作为 **`DEPLOY.md`** 或 README 的部署章节使用。
+**NASphere**
 
-另外有一点我建议你注意：**现在这份 YAML 已经在你的 NAS 上实际验证过核心构建链路**，但 `group_add: 994` 是针对你这台 NAS 的环境值，不适合原样写死给所有用户。正式发布 NASphere 时，最好把它改成**自动读取宿主机 Docker Socket GID**的部署方式，否则别人的 NAS 可能出现同样的 Docker Socket 权限问题。
-```
+自托管 · 本地化 · 可定制 · 面向 NAS
+
+© 2026 peekaboo789 · NASphere
+
+</div>
