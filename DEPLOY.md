@@ -14,10 +14,9 @@
 | 需要 | 说明 |
 | --- | --- |
 | 一台能跑 Docker 的 NAS | 群晖 Container Manager / 绿联 UGOS / 威联通 Container Station，或任何有 `docker` 的 Linux 机器 |
-| SSH 或图形终端 | SSH 最省事。只有网页图形界面也能装：在 DSM/UGOS 的 Compose 表单里照 §4 粘 `docker-compose.yml`，卷路径写成绝对路径，套件会自己从 `ghcr.io` 拉镜像；NAS 出不了网才需要 §5 的离线包（导入后按 §4 那两行重标成 compose 里的名字） |
-| 能拉 `ghcr.io` | 三条路线里只有 §5 不需要联网拉镜像。§3 和 §4 都是 `docker pull ghcr.io/peekaboo789/nasphere:1.0.0`，不构建、不下源码，所以也不用管 `node:22-alpine` 那个基础镜像 |
-| CPU 是 x86_64 或 aarch64 | `deploy.sh` 开头就判这个，其余架构直接退出。**注意 ghcr 上目前只有 `linux/amd64` 一份 manifest**，ARM64 机型在线拉会报 `no matching manifest for linux/arm64/v8`，走 §5 的 arm64 离线包（多架构镜像推上来之后这条限制就没了） |
-| 端口没被占用 | 默认对外 `18086`（`deploy.sh --port` 或安装目录 `.env` 里 `HOST_PORT` 可改，手工 compose 就改 `docker-compose.yml` 的 `ports`），容器内固定监听 `18086`。`8080` 常被设备自带服务占用，所以默认值避开它；再冲突就换端口（见 §7） |
+| SSH 或图形终端 | SSH 最省事。只有网页图形界面也能装：在 DSM/UGOS 的 Compose 表单里照 §4 的参数粘 `docker-compose.yml`，卷路径写成绝对路径（细节见 README 的群晖 / 绿联 / 威联通章节） |
+| 首次构建能上网 | 要拉一次 `node:22-alpine`（约 50MB）。NAS 拉不动就用路线 C 的离线镜像包（电脑上没 Docker 也能出，见 §5 C-2） |
+| 端口没被占用 | 默认对外 `18086`（`.env` 里 `HOST_PORT` 可改），容器内固定监听 `8080`。`8080` 常被设备自带服务占用，所以默认值避开它；再冲突就换端口（见 §7） |
 
 **先决定数据目录**，之后备份、迁移、排查都靠它：建议放有存储池的卷上，例如 `/volume1/docker/nasphere/data`。默认值是安装目录里的 `./data`。
 
@@ -110,25 +109,18 @@ chmod +x deploy.sh        # 只有你自己把脚本拷进去时才需要
 
 | 输出 | 含义 |
 | --- | --- |
-| `检测到 CPU 架构：AMD64（x86_64）` / `ARM64（aarch64）` | 架构判定。其余架构直接 `✕ 不支持的 CPU 架构：…` 退出 |
-| `安装目录：…` / `已创建安装目录：…` | 装到哪儿。默认 `./dat`，`--root` 或 `INSTALL_ROOT` 可改 |
-| `就地部署：…` + `（脚本旁边就是 NASphere 项目目录）`（或 `（脚本旁边已经有本脚本生成的 docker-compose.yml）`） | 判定成就地部署，不会再建 `dat/` |
-| `读取 …/.env` | 安装目录里有 `.env` 才打印 |
-| `! …/.env 不会被读取，.env 要放在 <安装目录>/.env 才生效` | 你把 `.env` 留在了执行命令的目录里，而安装目录是别处。搬过去或加 `--root` |
-| `当前用户不在 docker 组，后续 Docker 命令将使用 sudo` | 后续 `docker` 命令自动加 sudo，可能提示输密码，属正常（管道执行输不了密码，见上面的权限说明） |
-| `镜像：ghcr.io/peekaboo789/nasphere:1.0.0` / `取镜像方式：docker pull（本机不需要源码，也不构建）` / `容器：compose 项目 nasphere → 容器名 nasphere-nasphere-1` / `端口：18086 → 容器内 18086` / `数据：…/data` / `时区：Asia/Shanghai` | 生效的参数，优先级是**命令行 > 环境变量 > `.env` > 默认值**；数据目录已转成绝对路径 |
-| `首次启动：账号 admin、密码 admin123（镜像内置默认值）` | 部署前 `data/auth.json` 不存在时才打印（取样在容器启动之前，不会被服务端补写文件盖掉） |
-| `! 目录里那份 compose 不是本脚本生成的，已备份到 …/docker-compose.yml.backup-<时间戳>` | 目录里那份 yml 是你手写/从仓库拷来的，覆盖前先留一份。脚本自己生成的那份如果参数没变就只打印 `docker-compose.yml 与本次参数一致，未改动` |
-| `已生成 …/docker-compose.yml` 或 `docker-compose.yml 与本次参数一致，未改动` | compose 每次按本次参数重写，所以 `--port`、`--data-dir` 不会像以前那样被写死的 yml 吞掉 |
+| `当前用户不在 docker 组，后续命令都带 sudo` | 会自动加 sudo，可能提示输密码，属正常 |
+| `镜像：local/nasphere:1.0.0` / `容器：nasphere` / `端口：18086 → 容器内 8080` / `数据：/volume1/docker/nasphere/data` | 生效的参数，优先级是**命令行 > 环境变量 > `.env` > 默认值**；数据目录已转成绝对路径。上面还会有一行 `读取 …/.env`，只在项目里放了 `.env` 时出现 |
+| `部署方式：docker compose` / `部署方式：docker-compose` / `部署方式：docker run` | 实际选用的那条路（依次挑可用的一种） |
 | `没有已有配置，跳过备份` 或 `配置已备份到：<数据目录>/.deploy-backup/<时间戳>` | 升级前的 config/auth 快照，默认留最近 5 份（`KEEP_BACKUPS` 可调） |
-| `已记录旧版本镜像：sha256:abcdef1234` | 回滚锚点，同时另打一个 `<IMAGE>:rollback` 标签（§9）。首次部署没有这一行 |
-| `加载离线 Docker 镜像：…` → `已把包内镜像 local/nasphere:1.0.0 重标为 ghcr.io/peekaboo789/nasphere:1.0.0` | 仅 `--tar`：包里的名字与目标标签不一致时自动重标，走这条就不会去拉 ghcr |
-| `! 找不到 Docker Socket：/var/run/docker.sock` + `! NASphere Docker 管理功能将不可用（compose 里那行挂载已经省掉，其余功能照常）` | 宿主机上找不到套接字，跳过挂载——容器组件就没数据，需要的话按 §11 处理 |
-| `拉取 NASphere 镜像：…` | 就是 `docker pull`。失败时按架构给不同提示（ARM64 见上表架构那行），然后 `✕ 镜像没弄到手，部署到此为止；data/ 没有被改动` |
-| `启动 NASphere` → `Container nasphere-nasphere-1  Started` → `等待 NASphere 服务启动（最多 40s）` → `NASphere 安装/更新完成 ✓` + `访问地址：` / `  http://192.168.x.x:18086` | 起容器走的是 `docker compose up -d`；探活打的是免登录的 `/api/health`；最多等 `HEALTH_WAIT` 秒 |
-| `首次启动，登录账号：` + `用户名：admin` + `密码　：admin123` + `这是镜像内置的默认密码，公开仓库上人人可查。` + `! 请立刻记下…登录后立刻去「设置 → 安全」把账号和密码一起改掉。` | 首启凭据提示（§6、§12）。挂了 `docker.sock` 时中间还多一行提醒：页面账号等于能启停宿主机上的容器 |
+| `已记录旧版本镜像：sha256:abcdef1234` | 回滚锚点，同时另打一个 `local/nasphere:rollback` 标签（§9）。首次部署没有这一行 |
+| `加载离线 Docker 镜像：…` → `已把包内镜像 local/nasphere:1.0.0 重标为 local/nasphere:1.2.0` | 仅 `--tar`：包里的名字与目标标签不一致时自动重标（目标名由 `--tag` 定）|
+| `开始构建 NASphere Docker 镜像` + `基础镜像：node:22-alpine` | 首次要拉基础镜像，约 1–2 分钟，之后有层缓存。走 `--tar` 时这两行不出现 |
+| `! 找不到 Docker Socket：/var/run/docker.sock` + `! NASphere Docker 管理功能将不可用` | 宿主机上找不到套接字，跳过挂载——容器组件就没数据，其余功能照常，需要的话按 §11 处理。只有走 `docker run` 那条路才会打印 |
+| `启动 NASphere` → `等待 NASphere 服务启动（最多 40s）` → `✓ NASphere 安装/更新完成` + `访问地址：http://192.168.x.x:18086` | 探活打的是免登录的 `/api/health`；最多等 `HEALTH_WAIT` 秒 |
+| `! 检测到首次启动` + `初始账号：…` / `初始密码：…` | 部署前 `data/auth.json` 不存在时出现（取样在容器启动之前，不会被服务端补写文件盖掉）。登录后立刻去「设置 → 安全」改掉（§6） |
 
-`--dry-run` 只打印将要执行的动作（`mkdir`、生成的 compose 全文、`docker pull`、`docker compose up -d` 那几条）就结束，不落盘、不备份、不起容器，末尾是 `✓ dry-run 完成，没有修改任何内容`。
+`--dry-run` 只打印将要执行的命令（`docker build` / `docker compose up` / `docker run` 那几条，`NAV_PASSWORD` 有值时打成 `***`）就结束，不构建、不备份、不起容器。
 
 常用变体：
 
@@ -136,9 +128,9 @@ chmod +x deploy.sh        # 只有你自己把脚本拷进去时才需要
 ./deploy.sh --port 9000
 ./deploy.sh --data-dir /volume1/docker/nasphere/data
 ./deploy.sh --tag 1.1.0
-./deploy.sh --tar dist/nasphere-1.1.0-linux-amd64.tar.gz
-./deploy.sh --root /volume1/docker/NASphere   # 安装目录，默认 ./dat
-./deploy.sh --uninstall     # 停掉本项目的容器、删掉 NASphere 镜像，data/ 一个字节都不动
+./deploy.sh --tar dist/nasphere-1.1.0.tar.gz
+./deploy.sh --update        # 先 git pull 官方仓库再重新部署（直连失败会自动改用 gh-proxy 镜像）
+./deploy.sh --uninstall     # 删容器和本项目的镜像，data/ 一个字节都不动
 ```
 
 失败时脚本自己收尾：先打印容器状态与最后 30 行日志，再把升级前在用的镜像重新拉起（回滚成功也算失败，退出码 1，方便外层脚本判断）。数据不受影响，配置还在 `data/`。
@@ -156,7 +148,7 @@ docker compose ps              # STATUS 应为 Up (healthy)
 docker compose logs --tail 30
 ```
 
-浏览器打开 `http://<NAS-IP>:18086`。
+浏览器打开 `http://<NAS-IP>:18086`（`.env` 里改过 `HOST_PORT` 就用你那个值）。不想在 NAS 上构建（已有镜像）就把 `--build` 去掉。
 
 > yml 里没写 `container_name`，所以容器叫 `<compose 项目名>-nasphere-1`（项目名默认取目录名）。多台机器测试不会被「容器名已存在」顶住；要看是哪台就用 `docker compose ps`，别按名字找。
 
@@ -221,7 +213,7 @@ node make-image-offline.js --help
 | 检查 | 怎么看 |
 | --- | --- |
 | 服务活着 | `curl -s http://127.0.0.1:18086/api/health` → `{"ok":true,...}` |
-| 容器健康 | `docker inspect -f '{{.State.Health.Status}}' nasphere-nasphere-1` → `healthy`（healthcheck 每 60s 一次，刚起来那 1 分多钟显示 `starting` 是正常的；不确定容器叫什么就 `docker compose ps`） |
+| 容器健康 | `docker inspect -f '{{.State.Health.Status}}' nasphere` → `healthy`（healthcheck 每 60s 一次，刚起来那 1 分多钟显示 `starting` 是正常的） |
 | 登录门禁生效 | 无痕窗口打开首页应只见到登录页，看不到分组内容；`curl -i http://127.0.0.1:18086/api/config` 应为 401 |
 | 配置落盘 | 在页面上改一次外观，约 0.7 秒后 `data/config.json` 的改动就写在磁盘上了（服务端合并后再落一次规范化的结果） |
 | 上传可用 | 设置里上传一张图标，`data/uploads/` 出现随机命名的图片文件（支持 png/jpeg/gif/webp/avif/svg/ico，单张 ≤5MB，整个请求受 `MAX_BODY` 约束） |
@@ -232,8 +224,8 @@ node make-image-offline.js --help
 ## 7. 换端口 / 换数据目录（改了要重来一遍）
 
 ```bash
-# 只改宿主机端口（默认 18086），容器内固定监听 18086
-./deploy.sh --port 9000                     # 或安装目录 .env 里写 HOST_PORT=9000 后重跑
+# 只改宿主机端口（默认 18086），容器内固定监听 8080
+./deploy.sh --port 9000                     # 或 .env 里写 HOST_PORT=9000 后重跑
 
 # 换数据目录：先把旧数据整个搬过去，再指新路径（务必先停容器，别在跑着的时候拷）
 docker compose down                         # 在安装目录里
@@ -249,13 +241,7 @@ cp -a data /volume2/docker/nasphere-data
 
 **一键脚本**：在安装目录里 `./deploy.sh --tag <新版本>`，或者重跑 §3 那条 `curl … | bash`——它认得这个目录（旁边就有脚本生成的 compose），`data/` 原样留下，`.env` 也只读不写。脚本会先把在用的镜像记成回滚锚点、把 `config.json`、`auth.json` 存进 `data/.deploy-backup/`，再 pull 新标签、`docker compose up -d`、探活。
 
-> 不写 `--tag` 就是重跑当前默认标签（`1.0.0`）。ghcr 上同一个标签被重推过时，这次 pull 会拉回新的那份；想让升级有确定的落点，就给每个版本一个新标签。
-
-**手工 compose**：NAS 上连项目文件都不用换，把 `docker-compose.yml` 里 `image` 的标签改成新版本，再 `docker compose up -d`（compose 见本地没有这个标签会自己去 ghcr 拉）。ghcr 上标签没变但镜像重推过，就先 `docker compose pull` 再 up。
-
-**离线包**：`./deploy.sh --tar <新包>`，走 C-1/C-2 重出一份即可，NAS 全程不联网。
-
-> **从旧名 `nas-nav` 升上来的这一趟多做一步**：改名后镜像叫 `nasphere`、旧容器叫 `nas-nav`，旧容器还占着端口会把新容器顶失败（旧版默认对外 `8080`，新版默认 `18086`，只有你手动把两者撞到同一个端口上才会冲突）。先 `docker rm -f nas-nav`（只删容器，`data/` 里的配置、账号、上传的图一个都不动），再 `./deploy.sh`。手上是旧名字的离线包（`nas-nav-*.tar.gz`）也不碍事，`deploy.sh --tar` 会按包里的 `RepoTags` 自动重标。
+> **从旧名 `nas-nav` 升上来的这一趟多做一步**：改名后镜像是 `local/nasphere`、容器是 `nasphere`，脚本起的是新容器，旧 `nas-nav` 还占着端口会把新容器顶失败（旧版默认对外 `8080`，新版默认 `18086`，只有你手动把两者撞到同一个端口上才会冲突）。先 `docker rm -f nas-nav`（只删容器，`data/` 里的配置、账号、上传的图一个都不动，除非你 `.env` 里把 `DATA_DIR` 指到容器里去了），再 `./deploy.sh`。手上是旧名字的离线包（`nas-nav-*.tar.gz`）也不碍事，`deploy.sh --tar` 会按包里的 `RepoTags` 自动重标。
 
 ## 9. 回滚
 
@@ -298,21 +284,16 @@ docker compose up -d        # 或 ./deploy.sh
 | --- | --- | --- |
 | `这台机器上没有 docker` | 脚本要求 PATH 里有 docker | 用 Docker 图形套件里的 Compose/项目功能：先弄出 `ghcr.io/peekaboo789/nasphere:1.0.0` 这个镜像（§5 的离线包导入 + §4 那两行重标），再把 §4 那份 `docker-compose.yml` 贴进项目起起来；卷路径写绝对路径。或按 README「本地开发调试」直接跑 `node server/index.js` |
 | `连不上 docker 守护进程` | Docker / Container Manager 没启动；当前用户不在 docker 组 | 启动套件，或 `sudo ./deploy.sh`（脚本自己也会试 sudo） |
-| 一键安装报「没有权限写 …，也用不了免密 sudo」 | 目标目录的父级当前用户写不进去，而 `curl \| bash` 占住了 stdin，sudo 弹密码也输不了 | 整条命令用 root 跑（`curl … \| sudo bash`），或 `bash -s -- --root <你有权限的目录>`，或给当前用户配免密 sudo |
-| `拉取失败：ghcr.io/…`（AMD64 机器） | 这台机器到 `ghcr.io` 不通 | 换台机器 `docker save` 成离线包传上去，`./deploy.sh --tar <包>`；或者整套走 §4 的手工路线 |
-| `no matching manifest for linux/arm64/v8` | ghcr 上这个标签只有 amd64 那份 manifest | 用 §5 C-2 的 **arm64** 离线包 `./deploy.sh --tar`（脚本自动重标，不需要源码也不需要 build）。等仓库推了多架构之后这条在线就能拉 |
-| `✕ 不支持的 CPU 架构：…` | 机器既不是 x86_64 也不是 aarch64 | 脚本只测过这两种。照 §4 手工起 compose 试试（先确认那个镜像能在这台机器上跑起来） |
-| 探活失败、已自动回滚 | `cd <安装目录> && docker compose logs --tail 50`；`data/config.json` 是否被手改坏 | JSON 语法错服务仍会用默认配置起来且不覆盖你的文件，修好语法再刷新；端口被占看下一条 |
-| 端口没起来 / `Address already in use` | 宿主上 `18086` 被占（`ss -tlnp \| grep 18086`），或者另一条路线的容器还在跑 | `./deploy.sh --port 9000`，或 `.env` 里写 `HOST_PORT=9000`；两边同时在跑就 `docker compose down` 掉另一边 |
-| `docker.sock: connect version mismatch` 或组件全显示「Docker 不可用」 | 套接字没挂进来、路径不是 `/var/run/docker.sock`、或版本过旧 | `deploy.sh` 路线：安装目录 `.env` 里改 `DOCKER_SOCK` 后重跑（脚本会把它一起写进 compose 的 `DOCKER_HOST`）。手工 compose 路线：改 `docker-compose.yml` 里那行 `- /var/run/docker.sock:/var/run/docker.sock`（左右两边保持同一个宿主机路径最省事）。不需要这能力就把那行注释掉，其余功能照常 |
-| 上传图标 / 壁纸失败 | 反向代理的 `client_max_body_size`；容器 `MAX_BODY`（默认 8MB） | 反代放宽到同值以上；`MAX_BODY` 要改就 `docker run -e MAX_BODY=…`（compose 里加 `environment`）后重起 |
+| 探活失败、已自动回滚 | `docker logs --tail 50 nasphere`；`data/config.json` 是否被手改坏 | JSON 语法错服务仍会用默认配置起来且不覆盖你的文件，修好语法再刷新；端口被占看下一条 |
+| 端口没起来 / `Address already in use` | 宿主上 `18086` 被占（`ss -tlnp | grep 18086`） | `./deploy.sh --port 9000`，或 `.env` 里写 `HOST_PORT=9000` |
+| `docker.sock: connect version mismatch` 或组件全显示「Docker 不可用」 | 套接字没挂进来、路径不是 `/var/run/docker.sock`、或版本过旧 | `.env` 里改 `DOCKER_SOCK` 后重跑；不需要这能力就把 `docker-compose.yml` 里那行 `- ${DOCKER_SOCK…}:…` 注释掉（`DOCKER_HOST` 留着无害，只会显示不可用） |
+| 上传图标 / 壁纸失败 | 反向代理的 `client_max_body_size`；容器 `MAX_BODY`（默认 8MB） | 反代放宽到同值以上，必要时 `.env` 里 `MAX_BODY=…` 后重跑 |
 | 登录一直提示「尝试次数过多，请 1 分钟后再试」 | 每 IP 8 次/分钟的限流；限流只看 TCP 对端地址，不读 `X-Forwarded-For` | 等一分钟即可（重启容器会清空计数）。套了反向代理时所有访客共用同一个计数桶，家里人一起用容易互相牵连——这种场景优先直连端口或走 VPN |
 | 天气芯片不更新 | 是**浏览器**要访问 `api.open-meteo.com`，不是 NAS | 换网络或关掉天气开关 |
 | 必应每日壁纸拿不到 | 由 NAS 端代理并缓存 10 分钟，需要 NAS 能出网 | NAS 不能出网就改用图片链接或上传 |
 | 图标全是首字母方块 | favicon 服务（默认 `icon.horse`）取不到 | 设置 → 小组件里改「favicon 服务模板」（可用 `https://www.google.com/s2/favicons?sz=128&domain={domain}`），或给单个应用手填 Emoji / 图片 |
 | 反代后样式错乱 / 打不开子路径 `/nav/` | 静态资源与 API 都走根路径 | 整段转发到站点根（Nginx `location / { proxy_pass http://127.0.0.1:18086/; }`），别只匹配前缀 |
-| 非 root 起不来（`EACCES`） | 数据目录属主和容器运行用户不匹配。两条路线起的容器都是 root，compose 里也没写 `user:`，所以这条只在你自己加过运行用户时才会撞上 | `chown -R 1000:1000 data`，或者去掉自己加的那个 `user:` |
-| 登录后主页空空的 | 是正常状态：首启配置里没有分组 | 按 §6 建第一个分组 |
+| 非 root 起不来（`EACCES`） | 数据目录属主不对 | `chown -R 1000:1000 data`，再放开 `docker-compose.yml` 里注释的 `user: "1000:1000"` |
 
 ## 12. 安全边界（部署时请确认一次）
 

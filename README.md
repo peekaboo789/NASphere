@@ -112,11 +112,10 @@ docker compose up -d
 默认：
 
 ```text
-安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.0.0
-compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
+项目目录：/vol2/1000/dockers/NASphere
+容器名称：nasphere
 宿主端口：18086
-数据目录：./data（就在安装目录里）
+数据目录：/vol2/1000/dockers/NASphere/data
 ```
 
 `./dat` 是相对执行命令时所在的目录，想装别处就加 `--root`。
@@ -299,7 +298,7 @@ docker pull ghcr.io/peekaboo789/nasphere:1.0.0
 docker run -d \
   --name nasphere \
   --restart unless-stopped \
-  -p 18086:18086 \
+  -p 18086:8080 \
   -e NAV_USER='admin' \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
@@ -312,18 +311,16 @@ docker run -d \
 其中：
 
 ```text
-18086:18086
+18086:8080
 ```
 
 表示：
 
 ```text
-NAS 宿主机 18086 → NASphere 容器 18086
+NAS 宿主机 18086 → NASphere 容器 8080
 ```
 
-容器内部固定监听 `18086`（镜像里 `ENV PORT=18086`），冒号右边那一位不要跟着改。
-
-数据卷那一位同理：镜像里 `ENV DATA_DIR=/app/data`，宿主机目录挂到 `/app/data` 才会被读到。
+容器内部固定监听 `8080`（镜像里 `ENV PORT=8080`），冒号右边那一位不要跟着改。
 
 ---
 
@@ -1093,7 +1090,7 @@ dat/
 
 | 变量             | 默认值                           | 说明            |
 | -------------- | ----------------------------- | ------------- |
-| `PORT`         | `18086`                       | 容器内服务监听端口（对外端口用 `HOST_PORT`，默认 18086） |
+| `PORT`         | `8080`                        | 容器内服务监听端口（对外端口用 `HOST_PORT`，默认 18086） |
 | `HOST`         | `0.0.0.0`                     | 监听地址          |
 | `DATA_DIR`     | `/app/data`                   | 数据目录（镜像里 `ENV DATA_DIR`，宿主机的 `./data` 要挂到这个点） |
 | `NAV_USER`     | `admin`                       | 首次初始化账号       |
@@ -1104,28 +1101,16 @@ dat/
 
 ## deploy.sh
 
-下面这些只有 `deploy.sh` 读（手工 `docker compose up -d` 不读，仓库那份 `docker-compose.yml` 里是写死的值）：
-
-| 变量              | 默认值                        | 说明            |
-| --------------- | -------------------------- | ------------- |
-| `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
-| `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.0.0`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
-| `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
-| `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
-| `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
-| `COMPOSE_PROJECT` | `nasphere`                | compose 项目名，容器叫 `<项目名>-nasphere-1` |
-| `HEALTH_WAIT`   | `40`                       | 健康检查等待秒数      |
-| `KEEP_BACKUPS`  | `5`                        | `data/.deploy-backup/` 保留几份 |
-| `DOCKER_SOCK`   | `/var/run/docker.sock`     | 挂进容器的 Docker Socket，找不到就不挂 |
-
-`.env` 只在安装目录里那份生效（`<安装目录>/.env`，不是执行命令时的当前目录），生效顺序：
-
-```text
-命令行 > 环境变量 > .env > 默认值
-```
-
-`deploy.sh` 不再碰账号密码：`NAV_USER` / `NAV_PASSWORD` / `SESSION_DAYS` / `MAX_BODY` 都不由它注入，要改就走服务端的环境变量（`docker run -e` 或自己编辑生成出来的 compose）或页面里的「设置 → 安全」。
+| 变量             | 默认值                    | 说明            |
+| -------------- | ---------------------- | ------------- |
+| `HOST_PORT`    | `18086`                | NAS 宿主机端口     |
+| `IMAGE`        | `local/nasphere`       | Docker 镜像     |
+| `TAG`          | package.json version   | 镜像标签          |
+| `CONTAINER`    | `nasphere`             | 容器名称          |
+| `DATA_DIR`     | `./data`               | NASphere 数据目录 |
+| `HEALTH_WAIT`  | `40`                   | 健康检查等待时间      |
+| `KEEP_BACKUPS` | `5`                    | 保留备份数量        |
+| `DOCKER_SOCK`  | `/var/run/docker.sock` | Docker Socket |
 
 ---
 

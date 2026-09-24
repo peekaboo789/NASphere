@@ -36,8 +36,8 @@ set -euo pipefail
 # 基础配置
 # ============================================================
 
-# 镜像仓库。想换成自己的 fork 或内网镜像仓库，用 IMAGE / TAG 覆盖即可
-DEFAULT_IMAGE="ghcr.io/peekaboo789/nasphere"
+GITHUB_REPO="https://github.com/peekaboo789/NASphere.git"
+GITHUB_PROXY="https://gh-proxy.com"
 
 # 默认镜像标签。发新版时改这一行（要和 ghcr.io 上推上去的标签对得上）。
 # 这里故意不跟 latest：latest 哪天被重推，机器上跑的东西就跟着变了，退不回去。
@@ -46,9 +46,8 @@ DEFAULT_TAG="1.0.0"
 # 容器内监听端口，和镜像里的 ENV PORT 一致。要改只改宿主机那侧（--port / HOST_PORT）
 APP_PORT="18086"
 
-# compose 项目名。不写 container_name 之后容器叫 <项目名>-nasphere-1，
-# 脚本一律用项目名 + compose 文件定位容器，不认死容器名，多装几套也不会撞名。
-COMPOSE_PROJECT="${COMPOSE_PROJECT:-nasphere}"
+# 当脚本通过 curl | bash 执行时，SCRIPT_DIR 不是 NASphere 项目目录
+REMOTE_INSTALL=0
 
 # 安装目录的默认值：执行命令时所在目录下的 dat/
 DEFAULT_ROOT="${DEFAULT_ROOT:-./dat}"
@@ -110,16 +109,13 @@ die() {
 # 这些 knobs 允许从环境里传进来，先把环境的值存下来。
 # 直接写 VAR="" 会把继承来的环境值抹掉，那样文档里那张环境变量表就成了摆设。
 ENV_IMAGE="${IMAGE:-}"
+ENV_CONTAINER="${CONTAINER:-}"
 ENV_HOST_PORT="${HOST_PORT:-}"
 ENV_DATA_DIR="${DATA_DIR:-}"
 ENV_TAG="${TAG:-}"
 ENV_HEALTH_WAIT="${HEALTH_WAIT:-}"
 ENV_KEEP_BACKUPS="${KEEP_BACKUPS:-}"
 ENV_DOCKER_SOCK="${DOCKER_SOCK:-}"
-ENV_TZ="${TZ:-}"
-
-# 安装目录，也允许从环境传进来
-ENV_INSTALL_ROOT="${INSTALL_ROOT:-}"
 
 # 命令行槽位（下面按参数填）
 TAR=""
@@ -158,14 +154,23 @@ NASphere 一键安装 / 部署工具
     cd ./dat
     ./deploy.sh
 
+  更新源码并重新部署：
+    ./deploy.sh --update
+
+  离线镜像：
+    ./deploy.sh --tar nasphere.tar.gz
+
+  卸载容器与镜像（保留数据）：
+    ./deploy.sh --uninstall
+
 选项：
 
-  --root <目录>        安装到哪里，默认 ./dat（相对当前目录）
-  --tar <文件>         加载 docker save 导出的离线镜像包，跳过从 GHCR 拉取
-  --tag <标签>         镜像标签，默认 1.0.0
-  --port <端口>        宿主机端口，默认 18086（容器内固定监听 18086）
-  --data-dir <路径>    数据目录，默认 <安装目录>/data
-  --dry-run            只显示操作，不执行、不落盘
+  --update             从 GitHub 拉取最新版并重新部署
+  --tar <文件>         加载 docker save 导出的镜像包，跳过构建
+  --tag <标签>         镜像标签，默认使用 package.json version
+  --port <端口>        宿主机端口，默认 18086（容器内固定监听 8080）
+  --data-dir <路径>    数据目录，默认 ./data
+  --dry-run            只显示操作，不执行
   --uninstall          删除 NASphere 容器和镜像，但保留数据
   -h, --help           显示帮助
 
@@ -261,31 +266,10 @@ done
 # 路径与 sudo
 # ============================================================
 
-# 后面会 cd 进安装目录，所以所有相对路径都先按调用时的目录定死，
+# 后面会 cd 进项目目录，所以先把镜像包路径按调用时的目录定死，
 # 免得到时候 --tar dist/xxx.tar.gz 找不到文件
-absolute_path() {
-
-  local p="$1"
-
-  case "$p" in
-    /*)
-      printf '%s' "$p"
-      ;;
-    ./*)
-      printf '%s/%s' "$PWD" "${p#./}"
-      ;;
-    *)
-      printf '%s/%s' "$PWD" "$p"
-      ;;
-  esac
-}
-
-if [ -n "$TAR" ]; then
-  TAR="$(absolute_path "$TAR")"
-fi
-
-if [ -n "$INSTALL_ROOT" ]; then
-  INSTALL_ROOT="$(absolute_path "$INSTALL_ROOT")"
+if [ -n "$TAR" ] && [ "${TAR#/}" = "$TAR" ]; then
+  TAR="$PWD/$TAR"
 fi
 
 SUDO=""
@@ -344,11 +328,6 @@ run() {
         fi
         shift
         ;;
-      fs_cmd)
-        # 文件类命令：前缀就是它自己该不该带 sudo
-        if [ -n "$FSUDO" ]; then printf 'sudo '; fi
-        shift
-        ;;
       *)
         printf '%s ' "$1"
         shift
@@ -357,7 +336,18 @@ run() {
 
     local a
     for a in "$@"; do
-      printf '%q ' "$a"
+      case "$a" in
+        NAV_PASSWORD=)
+          # 空值没什么可藏的，原样打出来更好判断
+          printf '%q ' "$a"
+          ;;
+        NAV_PASSWORD=*)
+          printf '%q ' 'NAV_PASSWORD=***'
+          ;;
+        *)
+          printf '%q ' "$a"
+          ;;
+      esac
     done
 
     printf '\n'
@@ -401,17 +391,59 @@ check_docker
 # 检查 Compose：新版整套部署都靠它起容器
 # ============================================================
 
-# v2 = `docker compose`，v1 = 独立的 docker-compose，空 = 没有 compose
+check_git() {
+  command -v git >/dev/null 2>&1 || \
+    die "没有检测到 git，请先安装 git"
+}
+
+# 先连 GitHub，失败再走国内代理。目标目录由 $2 给出，必须还不存在。
+git_clone_repo() {
+
+  local dest="$1"
+
+  if git clone "$GITHUB_REPO" "$dest" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  rm -rf "$dest"
+
+  warn "GitHub 直连失败，改用国内代理：$GITHUB_PROXY"
+
+  git clone "${GITHUB_PROXY}/${GITHUB_REPO}" "$dest"
+}
+
+# 在仓库目录里拉取 main；直连失败就临时改用代理，拉完把 origin 还原。
+git_pull_repo() {
+
+  git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
+
+  if git pull --ff-only origin main; then
+    return 0
+  fi
+
+  warn "GitHub 直连失败，改用国内代理重试"
+
+  git remote set-url origin "${GITHUB_PROXY}/${GITHUB_REPO}" 2>/dev/null || true
+
+  if ! git pull --ff-only origin main; then
+    git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
+    return 1
+  fi
+
+  git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
+}
+
+# ============================================================
+# Compose
+# ============================================================
+
+# v2 = `docker compose`，v1 = 独立的 docker-compose，空 = 只能用 docker run
 COMPOSE_MODE=""
 
 if docker_cmd compose version >/dev/null 2>&1; then
   COMPOSE_MODE="v2"
 elif command -v docker-compose >/dev/null 2>&1; then
   COMPOSE_MODE="v1"
-fi
-
-if [ "$COMPOSE_MODE" = "" ]; then
-  die "这台机器上没有 docker compose（v2 或独立的 docker-compose 都行）。本脚本一律用 compose 起容器，装不了。"
 fi
 
 docker_compose_cmd() {
@@ -423,6 +455,60 @@ docker_compose_cmd() {
     else
       command docker-compose "$@"
     fi
+  fi
+}
+
+# ============================================================
+# 全新安装：下载 GitHub 项目
+# ============================================================
+
+install_from_github() {
+
+  check_git
+
+  local parent
+  parent="$(dirname "$DEFAULT_ROOT")"
+
+  mkdir -p "$parent"
+
+  if [ -d "$DEFAULT_ROOT/.git" ]; then
+
+    log "检测到已有 NASphere Git 仓库"
+
+    cd "$DEFAULT_ROOT"
+
+    log "更新 GitHub 仓库"
+
+    git_pull_repo || \
+      die "GitHub 下载失败，请检查网络或代理"
+
+  elif [ -d "$DEFAULT_ROOT" ] && [ -n "$(find "$DEFAULT_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)" ]; then
+
+    warn "发现已有 NASphere 目录，但不是 Git 仓库"
+
+    local backup_dir
+    backup_dir="${DEFAULT_ROOT}.backup-$(date +%Y%m%d-%H%M%S)"
+
+    mv "$DEFAULT_ROOT" "$backup_dir"
+
+    log "旧目录已备份：$backup_dir"
+
+    if ! git_clone_repo "$DEFAULT_ROOT"; then
+      rm -rf "$DEFAULT_ROOT"
+      mv "$backup_dir" "$DEFAULT_ROOT"
+      die "GitHub 下载失败，已把原目录还原回 $DEFAULT_ROOT"
+    fi
+
+docker_compose_cmd() {
+  if [ "$COMPOSE_MODE" = v2 ]; then
+    docker_cmd compose "$@"
+  else
+
+    log "从 GitHub 下载 NASphere"
+
+    git_clone_repo "$DEFAULT_ROOT" || \
+      die "NASphere 下载失败，请检查网络或 GitHub 国内代理是否可用"
+
   fi
 }
 
@@ -498,12 +584,23 @@ if [ "$LOCAL_MODE" = 1 ] && [ -z "$INSTALL_ROOT" ] && [ -z "$ENV_INSTALL_ROOT" ]
   log "就地部署：$ROOT"
   log "（$LOCAL_WHY）"
 else
-  # 默认值可以是相对路径（./dat），必须在这里按调用时的目录定死，
-  # 后面会 cd 进安装目录，晚一步解析就会指到别处
-  ROOT="$(absolute_path "${INSTALL_ROOT:-${ENV_INSTALL_ROOT:-$DEFAULT_ROOT}}")"
-  log "安装目录：$ROOT"
-  if [ "$LOCAL_MODE" = 1 ]; then
-    log "（$LOCAL_WHY，但以 --root / INSTALL_ROOT 给的目录为准）"
+  cd "$ROOT"
+
+  if [ "$UPDATE" = 1 ]; then
+    check_git
+
+    if [ -d "$ROOT/.git" ]; then
+
+      log "更新 NASphere GitHub 源码"
+
+      git_pull_repo || \
+        die "NASphere 更新失败，请检查网络或代理"
+
+      success "NASphere 源码更新完成"
+
+    else
+      die "当前目录不是 Git 仓库，无法执行 --update；请重新执行一键安装，或手动克隆到 NASphere 目录"
+    fi
   fi
 fi
 
@@ -531,6 +628,7 @@ cd "$ROOT" || \
 
 # 命令行解析结果先挪进 CLI_ 槽位，后面 source .env 会占用同名变量
 CLI_IMAGE="$IMAGE"
+CLI_CONTAINER="$CONTAINER"
 CLI_HOST_PORT="$HOST_PORT"
 CLI_DATA_DIR="$DATA_DIR"
 CLI_TAG="$TAG"
@@ -539,13 +637,13 @@ CLI_KEEP_BACKUPS="$KEEP_BACKUPS"
 CLI_DOCKER_SOCK="$DOCKER_SOCK"
 
 DOTENV_IMAGE=""
+DOTENV_CONTAINER=""
 DOTENV_HOST_PORT=""
 DOTENV_DATA_DIR=""
 DOTENV_TAG=""
 DOTENV_HEALTH_WAIT=""
 DOTENV_KEEP_BACKUPS=""
 DOTENV_DOCKER_SOCK=""
-DOTENV_TZ=""
 
 if [ -f "$ROOT/.env" ]; then
 
@@ -559,13 +657,13 @@ if [ -f "$ROOT/.env" ]; then
   grep -E '^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' "$ROOT/.env" | tr -d '\r' >"$_env_file" || true
 
   IMAGE=""
+  CONTAINER=""
   HOST_PORT=""
   DATA_DIR=""
   TAG=""
   HEALTH_WAIT=""
   KEEP_BACKUPS=""
   DOCKER_SOCK=""
-  TZ=""
 
   set -a
   # shellcheck disable=SC1090
@@ -576,40 +674,74 @@ if [ -f "$ROOT/.env" ]; then
   trap - EXIT
 
   DOTENV_IMAGE="$IMAGE"
+  DOTENV_CONTAINER="$CONTAINER"
   DOTENV_HOST_PORT="$HOST_PORT"
   DOTENV_DATA_DIR="$DATA_DIR"
   DOTENV_TAG="$TAG"
   DOTENV_HEALTH_WAIT="$HEALTH_WAIT"
   DOTENV_KEEP_BACKUPS="$KEEP_BACKUPS"
   DOTENV_DOCKER_SOCK="$DOCKER_SOCK"
-  DOTENV_TZ="$TZ"
 
 fi
 
-# 一键安装新建的目录里没有 .env 是正常的，但有人习惯把 .env 留在当前目录，
-# 这里提醒一句，别让人以为参数已经生效了
-if [ ! -f "$ROOT/.env" ] && [ -f "$PWD/.env" ] && [ "$PWD" != "$SCRIPT_DIR" ]; then
-  warn "$PWD/.env 不会被读取，.env 要放在 $ROOT/.env 才生效"
-fi
+# 版本默认值取自 package.json，先算好
+VERSION="$(
+  sed -n \
+    's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    package.json 2>/dev/null |
+    head -n 1 || true
+)"
 
-IMAGE="${CLI_IMAGE:-${ENV_IMAGE:-${DOTENV_IMAGE:-$DEFAULT_IMAGE}}}"
-HOST_PORT="${CLI_HOST_PORT:-${ENV_HOST_PORT:-${DOTENV_HOST_PORT:-$APP_PORT}}}"
-TAG="${CLI_TAG:-${ENV_TAG:-${DOTENV_TAG:-$DEFAULT_TAG}}}"
+DOTENV_IMAGE=""
+DOTENV_HOST_PORT=""
+DOTENV_DATA_DIR=""
+DOTENV_TAG=""
+DOTENV_HEALTH_WAIT=""
+DOTENV_KEEP_BACKUPS=""
+DOTENV_DOCKER_SOCK=""
+DOTENV_TZ=""
+
+# NAV_USER / NAV_PASSWORD / SESSION_DAYS / MAX_BODY / TZ 没有命令行开关，
+# 环境和 .env 里有哪个就用哪个
+IMAGE="${CLI_IMAGE:-${ENV_IMAGE:-${DOTENV_IMAGE:-local/nasphere}}}"
+CONTAINER="${CLI_CONTAINER:-${ENV_CONTAINER:-${DOTENV_CONTAINER:-nasphere}}}"
+HOST_PORT="${CLI_HOST_PORT:-${ENV_HOST_PORT:-${DOTENV_HOST_PORT:-18086}}}"
+DATA_DIR="${CLI_DATA_DIR:-${ENV_DATA_DIR:-${DOTENV_DATA_DIR:-$ROOT/data}}}"
 HEALTH_WAIT="${CLI_HEALTH_WAIT:-${ENV_HEALTH_WAIT:-${DOTENV_HEALTH_WAIT:-40}}}"
 KEEP_BACKUPS="${CLI_KEEP_BACKUPS:-${ENV_KEEP_BACKUPS:-${DOTENV_KEEP_BACKUPS:-5}}}"
 DOCKER_SOCK="${CLI_DOCKER_SOCK:-${ENV_DOCKER_SOCK:-${DOTENV_DOCKER_SOCK:-/var/run/docker.sock}}}"
-
-# TZ 没有命令行开关，但同样得按 环境变量 > .env > 默认值 排：
-# 上面 source .env 用的是 set -a，不重新算一遍的话 .env 会反过来盖掉环境变量
-TZ="${ENV_TZ:-${DOTENV_TZ:-Asia/Shanghai}}"
-
-# 数据目录默认在安装目录里，所以要等 ROOT 定死之后再算
-DATA_DIR="${CLI_DATA_DIR:-${ENV_DATA_DIR:-${DOTENV_DATA_DIR:-$ROOT/data}}}"
+TAG="${CLI_TAG:-${ENV_TAG:-${DOTENV_TAG:-$VERSION}}}"
 
 NEW_REF="$IMAGE:$TAG"
 
 # ============================================================
 # 参数校验
+# ============================================================
+
+case "$HOST_PORT" in
+  ''|*[!0-9]*)
+    die "端口必须是数字：$HOST_PORT"
+    ;;
+esac
+
+if [ "$HOST_PORT" -lt 1 ] || [ "$HOST_PORT" -gt 65535 ]; then
+  die "端口超出范围（1–65535）：$HOST_PORT"
+fi
+
+case "$KEEP_BACKUPS" in
+  ''|*[!0-9]*)
+    die "KEEP_BACKUPS 必须是数字：$KEEP_BACKUPS"
+    ;;
+esac
+
+case "$HEALTH_WAIT" in
+  ''|*[!0-9]*)
+    die "HEALTH_WAIT 必须是数字：$HEALTH_WAIT"
+    ;;
+esac
+
+# ============================================================
+# 处理相对数据目录
 # ============================================================
 
 case "$HOST_PORT" in
@@ -661,14 +793,15 @@ log "          NASphere 部署"
 log "=========================================="
 
 log "镜像：$NEW_REF"
-[ "$UNINSTALL" = 1 ] || log "取镜像方式：docker pull（本机不需要源码，也不构建）"
-log "容器：compose 项目 $COMPOSE_PROJECT → 容器名 ${COMPOSE_PROJECT}-nasphere-1"
-log "端口：$HOST_PORT → 容器内 $APP_PORT"
+log "容器：$CONTAINER"
+log "端口：$HOST_PORT → 容器内 8080"
 log "数据：$DATA_DIR"
 log "时区：$TZ"
 
-if [ "$FIRST_RUN" = 1 ] && [ "$UNINSTALL" != 1 ]; then
-  log "首次启动：账号 admin、密码 admin123（镜像内置默认值）"
+if [ -n "$COMPOSE_MODE" ]; then
+  log "部署方式：$([ "$COMPOSE_MODE" = v2 ] && echo 'docker compose' || echo docker-compose)"
+else
+  log "部署方式：docker run"
 fi
 
 if [ "$DRY" = 1 ]; then
@@ -684,22 +817,18 @@ if [ "$UNINSTALL" = 1 ]; then
   warn "准备卸载 NASphere（数据目录不会被删除）"
 
   if [ "$DRY" = 1 ]; then
-
-    compose_run down --remove-orphans
-
+    run docker_compose_cmd down --remove-orphans
+    run docker_cmd rm -f "$CONTAINER"
   else
-
-    if [ -f "$COMPOSE_FILE" ]; then
+    if [ -n "$COMPOSE_MODE" ] && [ -f "$ROOT/docker-compose.yml" ]; then
       log "用 Compose 停掉本项目"
-      compose_cmd down --remove-orphans || true
+      docker_compose_cmd down --remove-orphans || true
     fi
 
-    # 老版本用 docker run 起过一个就叫 nasphere 的容器，它会一直占着端口
-    if docker_cmd inspect "$COMPOSE_PROJECT" >/dev/null 2>&1; then
-      log "删除旧版本留下的同名容器：$COMPOSE_PROJECT"
-      docker_cmd rm -f "$COMPOSE_PROJECT" || true
+    if docker_cmd inspect "$CONTAINER" >/dev/null 2>&1; then
+      log "删除 NASphere 容器"
+      docker_cmd rm -f "$CONTAINER" || true
     fi
-
   fi
 
   log "删除 NASphere 镜像"
@@ -882,7 +1011,54 @@ else
 fi
 
 # ============================================================
-# 准备镜像：离线包 load，或从 GHCR 拉
+# 加载离线镜像，并把包里的名字重标成 $NEW_REF
+# ============================================================
+
+loaded_ref_of() {
+
+  # 从 `docker load` 的输出里取镜像名；没有标签的包退回镜像 ID
+  local out="$1" ref
+
+  ref="$(printf '%s\n' "$out" | sed -n 's/^Loaded image: //p' | tail -n 1)"
+
+  if [ -z "$ref" ]; then
+    ref="$(printf '%s\n' "$out" | sed -n 's/^Loaded image ID: sha256:\([0-9a-f]\{64\}\).*/sha256:\1/p' | tail -n 1)"
+  fi
+
+  printf '%s' "$ref"
+}
+
+# 退回方案：直接读包里的 manifest.json，取 RepoTags[0]
+ref_from_manifest() {
+
+  local src="$1"
+
+  tar -xOf "$src" manifest.json 2>/dev/null |
+    tr -d '\n\r ' |
+    sed -n 's/.*"RepoTags":\["\([^"]*\)".*/\1/p'
+}
+
+retag_loaded() {
+
+  local loaded="$1"
+
+  if [ -z "$loaded" ]; then
+    die "无法识别刚加载的镜像名，请手动 docker tag 成 $NEW_REF 后重试"
+  fi
+
+  if [ "$loaded" = "$NEW_REF" ]; then
+    log "包内镜像已经是 $NEW_REF"
+    return 0
+  fi
+
+  docker_cmd tag "$loaded" "$NEW_REF" || \
+    die "重标失败：$loaded → $NEW_REF"
+
+  log "已把包内镜像 $loaded 重标为 $NEW_REF"
+}
+
+# ============================================================
+# Docker 镜像
 # ============================================================
 
 loaded_ref_of() {
@@ -937,7 +1113,7 @@ if [ -n "$TAR" ]; then
 
   if [ "$DRY" = 1 ]; then
 
-    printf '  [dry-run] docker load -i %q && docker tag <包内镜像> %q（跳过 docker pull）\n' "$TAR" "$NEW_REF"
+    printf '  [dry-run] docker load -i %q && docker tag <包内镜像> %q\n' "$TAR" "$NEW_REF"
 
   else
 
@@ -1010,6 +1186,65 @@ if [ "$DRY" = 0 ]; then
 fi
 
 # ============================================================
+# 启动容器
+# ============================================================
+
+up_with() {
+
+  local ref="$1"
+  local img tag
+
+  img="${ref%:*}"
+  tag="${ref##*:}"
+
+  if [ -n "$COMPOSE_MODE" ]; then
+
+    # 把脚本算好的最终值交给 compose，避免它再用 .env 里的默认值
+    export IMAGE="$img"
+    export TAG="$tag"
+    export CONTAINER HOST_PORT DATA_DIR DOCKER_SOCK
+
+    run docker_compose_cmd up -d --remove-orphans
+
+    return 0
+
+  fi
+
+  run docker_cmd rm -f "$CONTAINER" || true
+
+  local sock=()
+
+  if [ -S "$DOCKER_SOCK" ]; then
+
+    sock=(
+      -e "DOCKER_HOST=unix://$DOCKER_SOCK"
+      -v "$DOCKER_SOCK:$DOCKER_SOCK"
+    )
+
+  else
+
+    warn "找不到 Docker Socket：$DOCKER_SOCK"
+
+    warn "NASphere Docker 管理功能将不可用"
+
+  fi
+
+  run docker_cmd run -d \
+    --name "$CONTAINER" \
+    --restart unless-stopped \
+    --init \
+    -p "$HOST_PORT:8080" \
+    -e "NAV_USER=${NAV_USER:-admin}" \
+    -e "NAV_PASSWORD=${NAV_PASSWORD:-}" \
+    -e "SESSION_DAYS=${SESSION_DAYS:-30}" \
+    -e "MAX_BODY=${MAX_BODY:-8388608}" \
+    -e "TZ=${TZ:-Asia/Shanghai}" \
+    -v "$DATA_DIR:/data" \
+    ${sock[@]+"${sock[@]}"} \
+    "$ref"
+}
+
+# ============================================================
 # 启动
 # ============================================================
 
@@ -1064,16 +1299,11 @@ probe_url() {
 # 宿主机上既没有 curl 也没有 wget 时，进到刚起的容器里用 node 自己探
 probe_in_container() {
 
-  local cid
-  cid="$(compose_ids | head -n 1)"
-
-  [ -n "$cid" ] || return 1
-
   docker_cmd exec \
-    "$cid" \
+    "$CONTAINER" \
     node \
     -e \
-    "require('http').get('http://127.0.0.1:'+(process.env.PORT||$APP_PORT)+'/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
+    "require('http').get('http://127.0.0.1:'+(process.env.PORT||8080)+'/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
     >/dev/null 2>&1
 }
 
@@ -1161,20 +1391,12 @@ if [ "$OK" = 1 ]; then
 
     printf '\033[33m------------------------------------------\033[0m\n'
 
-    printf '首次启动，登录账号：\n'
-    printf '  用户名：admin\n'
-    printf '  密码　：admin123\n'
+    printf '初始账号：%s\n' "${NAV_USER:-admin}"
+    printf '初始密码：%s\n' "${NAV_PASSWORD:-admin123}"
+    printf '（未设置 NAV_PASSWORD 时服务端用默认密码 admin123）\n'
 
     printf '\n'
-    printf '这是镜像内置的默认密码，公开仓库上人人可查。\n'
-
-    if [ -S "$DOCKER_SOCK" ]; then
-      printf '而且这个容器挂了 docker.sock，页面账号等于能启停宿主机上的容器。\n'
-    fi
-
-    printf '登录后立刻去「设置 → 安全」把账号和密码一起改掉。\n'
-
-    printf '\n'
+    warn "首次登录后请立即在「设置 → 安全」修改账号和密码"
 
   fi
 
@@ -1195,7 +1417,7 @@ warn "NASphere 健康检查失败"
 printf '\n'
 printf '容器状态：\n'
 docker_cmd ps -a \
-  --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
+  --filter "name=$CONTAINER" \
   --format '  {{.Names}} ｜ {{.Status}} ｜ {{.Image}}' \
   2>/dev/null || true
 
@@ -1224,7 +1446,7 @@ if [ -n "$PREV_ID" ]; then
 
   if docker_cmd image inspect "$NEW_REF" >/dev/null 2>&1; then
 
-    compose_cmd up -d --remove-orphans || true
+    up_with "$NEW_REF"
 
     R=0
 
@@ -1232,9 +1454,7 @@ if [ -n "$PREV_ID" ]; then
       sleep 2
       if probe 2>/dev/null; then
         success "已成功回滚到旧版本，$HOST_PORT 端口仍然可用"
-        printf '本机 %s 现在指向的是旧镜像（另外留了一份 %s:rollback）。\n' "$NEW_REF" "$IMAGE"
-        printf '\n'
-        exit 1
+        break
       fi
       R=$((R + 1))
     done
@@ -1244,14 +1464,9 @@ if [ -n "$PREV_ID" ]; then
   warn "新版本部署失败，旧版本回滚也没能通过探活"
   printf '\n'
   printf '旧版本镜像仍然在本机：%s:rollback\n' "$IMAGE"
-  printf '退回它（别再直接跑 ./deploy.sh，那会把坏的那份重新 pull 回来）：\n'
-  printf '  docker tag %s:rollback %s\n' "$IMAGE" "$NEW_REF"
-  printf '  cd %q && docker compose up -d\n' "$ROOT"
-  printf '或者拿上一版本的离线包走这条：./deploy.sh --tar <包>（它跳过 pull）\n'
+  printf '要退回它：docker tag %s:rollback %s，再用平时的方式起容器（docker compose up -d，或直接 ./deploy.sh --tar <上版本的包>）。\n' "$IMAGE" "$NEW_REF"
   printf '\n'
 
 fi
 
-printf '手工排查：cd %q && docker compose -p %q logs --tail 50\n' "$ROOT" "$COMPOSE_PROJECT"
-
-die "NASphere 部署失败"
+die "NASphere 部署失败，请检查：docker logs $CONTAINER"
