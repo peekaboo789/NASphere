@@ -24,6 +24,8 @@
 
 > 三条部署路线都不需要先把代码弄到 NAS 上：§3 只拉镜像，§4 只要那一个 yml，§5 要的是镜像包。这一节留给两种人——要自己出离线镜像包（§5 C-2，在电脑上做），和不走 Docker 直接 `node server/index.js` 跑起来改代码的（README「本地开发调试」）。
 
+> 走 §3 的一键安装**不需要先拿代码**：脚本自己会去 GitHub 取源码（直连失败改用 `gh-proxy.com`，连 `git` 都没有就下源码压缩包）。这一节是给手工 compose（§4）和离线镜像包（§5）用的。
+
 方式一（有 Git）：
 
 ```bash
@@ -53,6 +55,8 @@ mkdir -p /volume1/docker/nasphere && tar -xzf /volume1/docker/nasphere.tar.gz -C
 
 > 没有 `.env` 也能装，默认值就是 §0 那张表里写的那些。这一节是给要换端口、换安装目录、换镜像仓库的人：`deploy.sh` 会读**安装目录**里那份 `.env`（`<安装目录>/.env`，不是执行命令时的当前目录）。手工 compose（§4）不读 `.env`，那个文件里镜像、端口、卷、`TZ` 全是写死的值。
 
+> 走 §3 的一键安装可以跳过这一节：没有 `.env` 也能装，首装还会自动随机生成初始密码（见 §2 末尾和 §3 的输出对照）。手工 compose（§4）和离线包（§5）建议照这一节先准备一份。
+
 ```bash
 mkdir -p /volume1/docker/NASphere && cd /volume1/docker/NASphere
 # 从仓库里取 .env.example 太重的话，直接手写这几行也行
@@ -63,15 +67,14 @@ chmod 600 .env
 最少改这几行（其余留默认即可）：
 
 ```bash
-HOST_PORT=18086                 # 对外端口，容器内固定监听 18086
-DATA_DIR=/volume1/docker/nasphere/data   # 数据目录，留空就是 <安装目录>/data
-# TAG=1.1.0                     # 镜像标签，默认 1.0.0
-# IMAGE=ghcr.io/peekaboo789/nasphere   # 用自己的 fork 或内网仓库就改它
+NAV_USER=admin                       # 登录账号，之后可在「设置 → 安全」里改
+HOST_PORT=18086                      # 对外端口，容器内固定监听 8080
+# NAV_PASSWORD=换成你自己的强密码     # 只在首次启动（data/auth.json 不存在时）生效
 ```
 
-账号密码**不在这个文件里配**：`deploy.sh` 不注入 `NAV_USER` / `NAV_PASSWORD`，首启就是镜像内置的 `admin` / `admin123`，装完登录去「设置 → 安全」改掉（§6、§12）。真要在首次启动前定死密码，只有 §13 那条 `docker run -e` 的路线。
+`NAV_PASSWORD` 在 `.env.example` 里是注释掉的状态。留注释、并且用 `deploy.sh` 部署的话，首次安装会随机生成一个 16 位密码：写回 `.env`（权限 `600`）、只在终端打印一次。你自己取消注释填了值，就不会再生成，直接用你填的。
 
-其余变量、默认值与含义见 README 的「环境变量 → deploy.sh」。生效顺序是**命令行 > 环境变量 > `.env` > 默认值**。
+其余变量、默认值与含义见 README 的「配置项（环境变量）」一节。`.env` 里是明文密码，权限收紧到 `600`，`docker compose` 与 `deploy.sh` 都会读它（`deploy.sh` 的生效顺序是**命令行 > 环境变量 > `.env` > 默认值**）。
 
 ## 3. 路线 A：一键脚本（推荐）
 
@@ -81,46 +84,49 @@ DATA_DIR=/volume1/docker/nasphere/data   # 数据目录，留空就是 <安装�
 curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | bash
 ```
 
-装到 `./dat`，也就是你执行这条命令时所在目录下的 `dat/`。要换目录或换端口得走 `bash -s --`——管道执行时 stdin 已经被脚本占着，参数直接跟在 `| bash` 后面是传不进去的：
+源码装到 `/vol2/1000/dockers/NASphere`。要换目录或换端口得走 `bash -s --`——管道执行时 stdin 已经被脚本占着，参数直接跟在 `| bash` 后面是传不进去的：
 
 ```bash
 curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | \
   bash -s -- --root /volume1/docker/NASphere --port 9000
 ```
 
-装完那个目录里只有两样东西：`docker-compose.yml`（每次部署由脚本按本次参数重写）和 `data/`。脚本自己不往那儿落副本，下次升级重跑这条命令就行。
+模式是脚本自己判的：脚本所在目录（管道执行时就是你执行命令的那个目录）能同时看到 `Dockerfile` 和 `server/index.js`，就是 A-2 的本机模式；看不到就先进入一键安装，下载完源码再按本机模式那套流程往下走。
 
-模式是脚本自己判的：脚本所在目录（管道执行时就是你执行命令的那个目录）里能看到 `Dockerfile` + `server/index.js`，或者已经躺着一份本脚本生成的 `docker-compose.yml`，就当就地部署、不再新建 `dat/`。
+权限方面注意一件事：一键安装要往 `/vol2/1000/dockers` 这类目录写文件，而 `curl | bash` 把 stdin 占住了，`sudo` 真要密码是输不进去的。所以要么整个用 root 跑（`curl … | sudo bash`），要么 `--root` 指一个你有写权限的目录，要么给当前用户配免密 sudo。Docker 那一侧不同：当前用户不在 `docker` 组时脚本会自己在 `docker` 命令前面加 sudo。
 
-权限方面注意一件事：安装要往 `./dat`（或 `--root` 指的目录）写文件，而 `curl | bash` 把 stdin 占住了，`sudo` 真要密码是输不进去的。所以要么整个用 root 跑（`curl … | sudo bash`），要么 `--root` 指一个你有写权限的目录，要么给当前用户配免密 sudo。Docker 那一侧不同：当前用户不在 `docker` 组时脚本会自己在 `docker` 命令前面加 sudo。
-
-### A-2 本机已经有安装目录
+### A-2 本机已经有项目目录
 
 ```bash
-cd /volume1/docker/NASphere
-chmod +x deploy.sh        # 只有你自己把脚本拷进去时才需要
-./deploy.sh --dry-run     # 先看要执行什么，不动任何东西
-./deploy.sh               # 真跑
+cd /vol2/1000/dockers/NASphere
+chmod +x deploy.sh make-image.sh
+./deploy.sh --dry-run      # 先看要执行什么，不动任何东西
+./deploy.sh                # 真跑
 ```
 
 ### 输出对照
 
-脚本的流程是**检测架构 → 准备目录 → 生成 docker-compose.yml → 拉镜像 → `docker compose up -d` → 探活**，跑起来会看到这些行，含义依次是：
+脚本按 `docker compose`（v2）→ `docker-compose`（v1）→ 裸 `docker run` 依次挑可用的一种。跑起来会看到这些行，含义依次是：
 
 | 输出 | 含义 |
 | --- | --- |
-| `当前用户不在 docker 组，后续命令都带 sudo` | 会自动加 sudo，可能提示输密码，属正常 |
-| `镜像：local/nasphere:1.0.0` / `容器：nasphere` / `端口：18086 → 容器内 8080` / `数据：/volume1/docker/nasphere/data` | 生效的参数，优先级是**命令行 > 环境变量 > `.env` > 默认值**；数据目录已转成绝对路径。上面还会有一行 `读取 …/.env`，只在项目里放了 `.env` 时出现 |
+| `模式：本机项目目录（…）` / `模式：一键安装（源码目录 …）` | 自动判定成了哪种模式 |
+| `下载 NASphere 源码到 …` → `✓ NASphere 源码已准备完成：…` | 仅一键安装。直连不上会打印 `! GitHub 直连失败，改用国内代理…`；没有 git 就 `! 本机没有 git，改用源码压缩包下载（这样装完不能用 --update）` |
+| `! … 里已经有东西，但不是 Git 仓库；先整体备份到 ….backup-<时间戳>` → `✓ 原有数据目录已迁回：…/data` → `› 原有 .env 已保留` | 原地重装：老目录整体挪去备份，再把 `data/` 与 `.env` 搬回新目录，壁纸、图标、配置、账号都不丢；下载失败会把原目录还原回去然后退出 |
+| `当前用户不在 docker 组，后续 Docker 命令将使用 sudo` | 后续 `docker` 命令自动加 sudo，可能提示输密码，属正常（管道执行输不了密码，见上面的权限说明） |
+| `项目目录：…` / `运行模式：本机已有项目`（或 `运行模式：一键安装（源码本次下载）`）/ `镜像：local/nasphere:1.0.0` / `容器：nasphere` / `端口：18086 → 容器内 8080` / `数据：…/data` | 生效的参数，优先级是**命令行 > 环境变量 > `.env` > 默认值**；数据目录已转成绝对路径。上面还会有一行 `读取 …/.env`，只在项目里放了 `.env` 时出现 |
+| `首次启动：账号 admin` | 部署前 `data/auth.json` 不存在时才打印（取样在容器启动之前，不会被服务端补写文件盖掉） |
 | `部署方式：docker compose` / `部署方式：docker-compose` / `部署方式：docker run` | 实际选用的那条路（依次挑可用的一种） |
 | `没有已有配置，跳过备份` 或 `配置已备份到：<数据目录>/.deploy-backup/<时间戳>` | 升级前的 config/auth 快照，默认留最近 5 份（`KEEP_BACKUPS` 可调） |
 | `已记录旧版本镜像：sha256:abcdef1234` | 回滚锚点，同时另打一个 `local/nasphere:rollback` 标签（§9）。首次部署没有这一行 |
 | `加载离线 Docker 镜像：…` → `已把包内镜像 local/nasphere:1.0.0 重标为 local/nasphere:1.2.0` | 仅 `--tar`：包里的名字与目标标签不一致时自动重标（目标名由 `--tag` 定）|
 | `开始构建 NASphere Docker 镜像` + `基础镜像：node:22-alpine` | 首次要拉基础镜像，约 1–2 分钟，之后有层缓存。走 `--tar` 时这两行不出现 |
+| `随机初始密码已写入 <项目目录>/.env（权限 600）` | 首装且没人指定密码时才有这一行。写不进去会换成 `! 写不进 ….env，随机初始密码只在这次输出里显示一次` |
 | `! 找不到 Docker Socket：/var/run/docker.sock` + `! NASphere Docker 管理功能将不可用` | 宿主机上找不到套接字，跳过挂载——容器组件就没数据，其余功能照常，需要的话按 §11 处理。只有走 `docker run` 那条路才会打印 |
-| `启动 NASphere` → `等待 NASphere 服务启动（最多 40s）` → `✓ NASphere 安装/更新完成` + `访问地址：http://192.168.x.x:18086` | 探活打的是免登录的 `/api/health`；最多等 `HEALTH_WAIT` 秒 |
-| `! 检测到首次启动` + `初始账号：…` / `初始密码：…` | 部署前 `data/auth.json` 不存在时出现（取样在容器启动之前，不会被服务端补写文件盖掉）。登录后立刻去「设置 → 安全」改掉（§6） |
+| `启动 NASphere` → `等待 NASphere 服务启动（最多 40s）` → `NASphere 安装/更新完成 ✓` + `访问地址：` / `  http://192.168.x.x:18086` | 探活打的是免登录的 `/api/health`；最多等 `HEALTH_WAIT` 秒 |
+| `首次启动，登录账号：` + `用户名：admin` + `密码　：<16 位>` + `! 请立刻记下密码，并登录后在「设置 → 安全」改成自己的` | 紧跟的一行说明密码从哪来：`这个密码是本次安装随机生成的，不是默认密码。` / `已留档在：….env（权限 600，忘记密码时在这里查）`，或者 `密码来自 NAV_PASSWORD（环境变量或 .env）。`。登录后立刻去「设置 → 安全」改掉（§6） |
 
-`--dry-run` 只打印将要执行的命令（`docker build` / `docker compose up` / `docker run` 那几条，`NAV_PASSWORD` 有值时打成 `***`）就结束，不构建、不备份、不起容器。
+`--dry-run` 只打印将要执行的命令（`docker build` / `docker compose up` / `docker run` 那几条，`NAV_PASSWORD` 有值时打成 `***`）就结束，不构建、不备份、不起容器；一键安装模式下连源码都不下载，末尾是 `✓ dry-run 完成，没有下载、没有落盘`。
 
 常用变体：
 
@@ -129,6 +135,8 @@ chmod +x deploy.sh        # 只有你自己把脚本拷进去时才需要
 ./deploy.sh --data-dir /volume1/docker/nasphere/data
 ./deploy.sh --tag 1.1.0
 ./deploy.sh --tar dist/nasphere-1.1.0.tar.gz
+./deploy.sh --source /volume1/docker/NASphere-src.tar.gz   # 源码也不联网，用本地包
+./deploy.sh --root /volume1/docker/NASphere   # 仅一键安装模式生效，本机模式仍部署当前目录
 ./deploy.sh --update        # 先 git pull 官方仓库再重新部署（直连失败会自动改用 gh-proxy 镜像）
 ./deploy.sh --uninstall     # 删容器和本项目的镜像，data/ 一个字节都不动
 ```
@@ -202,7 +210,7 @@ node make-image-offline.js --help
 
 初始配置**没有任何分组、链接和容器组件**，所以登录后的主页只有搜索框、时钟、天气条和底部署名——没有卡片、没有左侧导航、没有右缘滚动条，主页上那一层容器组件也整层不出现。
 
-1. **改掉账号与密码**：设置（按 `,`）→ 安全。三条路线首启都是镜像内置的 `admin` / `admin123`（`deploy.sh` 不再随机生成密码，也不读 `.env` 里的凭据），这是公开仓库上人人可查的默认值，而且容器默认挂着 `docker.sock`——**装完第一件事就是登进去把账号和密码一起改掉**。改过一次之后 `data/auth.json` 就是唯一凭据来源，之后重装、升级、换镜像都不会把它换回去。想连这一步都省掉，只有 §13 那条 `docker run -e NAV_PASSWORD=…` 的路线。
+1. **确认账号与密码**：设置（按 `,`）→ 安全。§2 里设过 `NAV_PASSWORD` 的，首启密码就是它、不会提示；没设而 `deploy.sh` 首装的话，密码是随机生成那一个（终端只打印过一次，留档在 `.env`，§3）；只有绕过 `deploy.sh` 直接 `docker compose up -d` 且没写 `.env`，才会落到镜像内置的 `admin123`——这种情况下容器日志会打警告、每次打开页面也会弹提示，账号还是默认的 `admin` 时「安全」那一栏同样标出来。不管哪种，首启后就把账号和密码改掉。改过一次之后 `data/auth.json` 就是唯一凭据来源，`.env` 里的变量不再起作用（§10）。
 2. **建第一个分组**：设置 → 数据 → 分组概览 →「＋ 新建分组」。**不用开编辑模式**。
 3. **加应用**：设置 → 编辑应用 →「＋ 新建应用」。名称必填，外网网址和内网网址**至少填一条**（只填一条时，切到另一种取址模式下这张卡会变灰、点了不跳转）；内网就是家里那台机器的地址，如 `http://192.168.1.100:5000`。图标选「站点 favicon」留空即可，取不到会回退首字母。**还没有分组时这颗按钮会提示你先去建组**。
 4. **容器组件**：设置 → 应用矩阵 →「容器一览」，这台 NAS 上的容器整列摊开，点一个就往主页上加一张组件（已经挂过的标着「已在页面上」，点它去编辑那张），一张组件对一个容器；新加的落在最下面那张的下方，**想摆到别处就回主页长按那张组件约半秒再拖**，摆到任意坐标、互相叠放都行。启停和重启同样在主页那张组件上**右键**。看不到列表或显示「Docker 不可用」→ 检查 `docker.sock` 有没有挂进来（§11 排查表）。
@@ -239,7 +247,13 @@ cp -a data /volume2/docker/nasphere-data
 
 ## 8. 升级
 
-**一键脚本**：在安装目录里 `./deploy.sh --tag <新版本>`，或者重跑 §3 那条 `curl … | bash`——它认得这个目录（旁边就有脚本生成的 compose），`data/` 原样留下，`.env` 也只读不写。脚本会先把在用的镜像记成回滚锚点、把 `config.json`、`auth.json` 存进 `data/.deploy-backup/`，再 pull 新标签、`docker compose up -d`、探活。
+一键安装过来的目录最省事：`./deploy.sh --update` 拉最新源码再重新部署，或者直接重跑 §3 那条 `curl … | bash`——它认得这个目录（`.git` 在就原地 `git pull`），`data/` 和 `.env` 原样留下。手工路线则是这三步：
+
+1. 更新项目文件（`git pull`，或重新传 tar 包，或直接替换 `dist/*.tar.gz`）。
+2. `./deploy.sh --tag <新版本>`（`--tag` 与 `package.json` 的 version 不一致时以你写的为准）。
+3. 配置在 `data/`，换镜像不动它；升级前脚本已把 `config.json`、`auth.json` 存进 `data/.deploy-backup/`。
+
+> 项目目录里的 `.env` 会跟着 `.gitignore` 走，`git pull` 不会动它，随机生成的那个 `NAV_PASSWORD` 也就一直留在原地（虽然 `auth.json` 存在时它已经不生效了）。
 
 > **从旧名 `nas-nav` 升上来的这一趟多做一步**：改名后镜像是 `local/nasphere`、容器是 `nasphere`，脚本起的是新容器，旧 `nas-nav` 还占着端口会把新容器顶失败（旧版默认对外 `8080`，新版默认 `18086`，只有你手动把两者撞到同一个端口上才会冲突）。先 `docker rm -f nas-nav`（只删容器，`data/` 里的配置、账号、上传的图一个都不动，除非你 `.env` 里把 `DATA_DIR` 指到容器里去了），再 `./deploy.sh`。手上是旧名字的离线包（`nas-nav-*.tar.gz`）也不碍事，`deploy.sh --tar` 会按包里的 `RepoTags` 自动重标。
 
@@ -284,6 +298,8 @@ docker compose up -d        # 或 ./deploy.sh
 | --- | --- | --- |
 | `这台机器上没有 docker` | 脚本要求 PATH 里有 docker | 用 Docker 图形套件里的 Compose/项目功能：先弄出 `ghcr.io/peekaboo789/nasphere:1.0.0` 这个镜像（§5 的离线包导入 + §4 那两行重标），再把 §4 那份 `docker-compose.yml` 贴进项目起起来；卷路径写绝对路径。或按 README「本地开发调试」直接跑 `node server/index.js` |
 | `连不上 docker 守护进程` | Docker / Container Manager 没启动；当前用户不在 docker 组 | 启动套件，或 `sudo ./deploy.sh`（脚本自己也会试 sudo） |
+| 一键安装报「没有权限写 …，也用不了免密 sudo」 | 目标目录的父级当前用户写不进去，而 `curl \| bash` 占住了 stdin，sudo 弹密码也输不了 | 整条命令用 root 跑（`curl … \| sudo bash`），或 `bash -s -- --root <你有权限的目录>`，或给当前用户配免密 sudo |
+| `NASphere 下载失败：检查网络或 GitHub 代理` | NAS 出不了网，`gh-proxy.com` 也不通 | 换台机器下好源码包传上去，`./deploy.sh --source <包>`；或者干脆走 §5 的离线镜像包 |
 | 探活失败、已自动回滚 | `docker logs --tail 50 nasphere`；`data/config.json` 是否被手改坏 | JSON 语法错服务仍会用默认配置起来且不覆盖你的文件，修好语法再刷新；端口被占看下一条 |
 | 端口没起来 / `Address already in use` | 宿主上 `18086` 被占（`ss -tlnp | grep 18086`） | `./deploy.sh --port 9000`，或 `.env` 里写 `HOST_PORT=9000` |
 | `docker.sock: connect version mismatch` 或组件全显示「Docker 不可用」 | 套接字没挂进来、路径不是 `/var/run/docker.sock`、或版本过旧 | `.env` 里改 `DOCKER_SOCK` 后重跑；不需要这能力就把 `docker-compose.yml` 里那行 `- ${DOCKER_SOCK…}:…` 注释掉（`DOCKER_HOST` 留着无害，只会显示不可用） |
@@ -301,7 +317,7 @@ docker compose up -d        # 或 ./deploy.sh
 - 服务本身只放行「配置里点名过的容器」，动作只有启动 / 停止 / 重启；`rm`、`exec` 连接口都没有。
 - 未内置 HTTPS。公网入口请放反向代理（Nginx / Caddy / Traefik）后做 TLS，并强烈建议再套一层认证（Cloudflare Access / Tailscale / 群晖反向代理认证）。
 - 未登录能拿到的只有页面外壳（`/`、`/css`、`/js`）、`/api/health` 和登录接口；配置数据与上传图片一律 401（例外见 §13 表格）。所以门禁的全部价值就是那一道登录，公网直挂前请自行评估。
-- **三条部署路线的首启密码都是镜像内置的 `admin` / `admin123`**（`deploy.sh` 以前那套随机初始密码已经去掉了——脚本不再有源码和本机 build，密码也没地方写进 `.env`）。也就是说「装完立刻改密码」从建议变成了必须做的一步，尤其是还挂着 `docker.sock` 的时候。想在首次启动前就定死密码，只有 §13 的 `docker run -e NAV_PASSWORD=…` 那条路。
+- 首启密码由 `deploy.sh` 随机生成（不再是人人一样的默认值），只打印一次并留档在 `.env`（`600`）。只有绕过脚本、直接 `docker compose up -d` 且不写 `.env`，才会退回镜像内置的默认密码——所以这条命令之前请先按 §2 备好 `.env`。这个容器还挂着 `docker.sock`，裸密码等于把宿主机一起送出去。
 - 密码只以 scrypt 哈希存 `data/auth.json`（`0600`），永不下发；`data/` 整个目录建议 `700`。
 - 单实例设计，无并发冲突处理：两个人同时编辑会互相覆盖。
 

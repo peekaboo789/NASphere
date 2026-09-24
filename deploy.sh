@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
 # NASphere 一键安装 / 部署 / 升级 / 回滚 / 卸载
 #
-# 这个脚本不需要源码，也不在本机 build 镜像。它做五件事：
-#
-#   1. 检测 CPU 架构
-#   2. 准备安装目录（默认 ./dat）
-#   3. 生成 docker-compose.yml
-#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.0
-#   5. 起容器：docker compose up -d
-#
-# 装完之后目录里只有两样东西：compose 文件（每次部署由脚本重写）和 data/
-# （你的配置、账号、壁纸、图标）。升级、回滚都只动镜像，data/ 一个字节都不碰。
-#
-# 用法一：全新 NAS，一条命令装
+# 模式一：全新 NAS 一键安装（本机不需要先有项目，脚本自己去 GitHub 取源码）
 #
 #   curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | bash
 #
@@ -20,9 +9,9 @@
 #   curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | \
 #     bash -s -- --root /volume1/docker/NASphere --port 9000
 #
-# 用法二：本机已经有安装目录（cd 进去直接跑就是升级）
+# 模式二：本机已经有项目目录
 #
-#   cd ./dat
+#   cd /vol2/1000/dockers/NASphere
 #   ./deploy.sh
 #
 # 升级：重跑上面任意一条，脚本自己 pull 新镜像；换版本用 ./deploy.sh --tag 1.1.0
@@ -36,28 +25,18 @@ set -euo pipefail
 # 基础配置
 # ============================================================
 
-GITHUB_REPO="https://github.com/peekaboo789/NASphere.git"
-GITHUB_PROXY="https://gh-proxy.com"
+# 想用自己的 fork 或内网镜像，用环境变量覆盖这两行即可
+GITHUB_REPO="${GITHUB_REPO:-https://github.com/peekaboo789/NASphere.git}"
+GITHUB_PROXY="${GITHUB_PROXY:-https://gh-proxy.com}"
+BRANCH="${BRANCH:-main}"
 
-# 默认镜像标签。发新版时改这一行（要和 ghcr.io 上推上去的标签对得上）。
-# 这里故意不跟 latest：latest 哪天被重推，机器上跑的东西就跟着变了，退不回去。
-DEFAULT_TAG="1.0.0"
+# 没有 git 时的退路：直接下源码压缩包（去掉 .git 后缀就是 archive 地址）
+SOURCE_TARBALL="${GITHUB_REPO%.git}/archive/refs/heads/${BRANCH}.tar.gz"
 
-# 容器内监听端口，和镜像里的 ENV PORT 一致。要改只改宿主机那侧（--port / HOST_PORT）
-APP_PORT="18086"
-
-# 当脚本通过 curl | bash 执行时，SCRIPT_DIR 不是 NASphere 项目目录
-REMOTE_INSTALL=0
-
-# 安装目录的默认值：执行命令时所在目录下的 dat/
-DEFAULT_ROOT="${DEFAULT_ROOT:-./dat}"
-
-# 生成的 compose 文件头部标记。靠它区分「脚本产物」和「用户手写的文件」，
-# 后者被覆盖前先留一份备份
-GENERATED_KEY="由 NASphere deploy.sh 生成"
+DEFAULT_ROOT="${DEFAULT_ROOT:-/vol2/1000/dockers/NASphere}"
 
 # curl | bash 时 BASH_SOURCE[0] 是未定义的，$0 才是 "bash"。
-# 这里必须带 :- 回落，否则 set -u 会让脚本在下一行直接死掉，
+# 这里必须带 :- 回落，否则 set -u 会让脚本在第 30 行直接死掉，
 # 那条一键安装命令连一行输出都不会有。
 SCRIPT_SRC="${BASH_SOURCE[0]:-$0}"
 
@@ -68,17 +47,11 @@ else
   SCRIPT_DIR="$PWD"
 fi
 
-# 就地部署的两种情形：脚本旁边就是 NASphere 项目目录，或者已经放着一份本脚本生成的 compose
+# 脚本旁边就有项目文件 → 本机模式；否则 → 一键安装模式，先下载源码
 LOCAL_MODE=0
-LOCAL_WHY=""
 
 if [ -f "$SCRIPT_DIR/Dockerfile" ] && [ -f "$SCRIPT_DIR/server/index.js" ]; then
   LOCAL_MODE=1
-  LOCAL_WHY="脚本旁边就是 NASphere 项目目录"
-elif [ -f "$SCRIPT_DIR/docker-compose.yml" ] &&
-  grep -q "$GENERATED_KEY" "$SCRIPT_DIR/docker-compose.yml" 2>/dev/null; then
-  LOCAL_MODE=1
-  LOCAL_WHY="脚本旁边已经有本脚本生成的 docker-compose.yml"
 fi
 
 # ============================================================
@@ -116,9 +89,18 @@ ENV_TAG="${TAG:-}"
 ENV_HEALTH_WAIT="${HEALTH_WAIT:-}"
 ENV_KEEP_BACKUPS="${KEEP_BACKUPS:-}"
 ENV_DOCKER_SOCK="${DOCKER_SOCK:-}"
+ENV_NAV_USER="${NAV_USER:-}"
+ENV_NAV_PASSWORD="${NAV_PASSWORD:-}"
+ENV_SESSION_DAYS="${SESSION_DAYS:-}"
+ENV_MAX_BODY="${MAX_BODY:-}"
+ENV_TZ="${TZ:-}"
+
+# 一键安装时的目标目录，也允许从环境传进来
+ENV_INSTALL_ROOT="${INSTALL_ROOT:-}"
 
 # 命令行槽位（下面按参数填）
 TAR=""
+SOURCE=""
 DRY=0
 UNINSTALL=0
 TAG=""
@@ -135,42 +117,32 @@ usage() {
 
 NASphere 一键安装 / 部署工具
 
-流程：检测 CPU 架构 → 准备目录 → 生成 docker-compose.yml → 从 GHCR 拉镜像 → docker compose up -d。
-不需要源码，不在本机 build。
+两种模式，自动判断：
 
-两种用法，自动判断：
-
-  用法一 全新 NAS 一条命令装（本机不需要先有项目）：
+  模式一 全新 NAS 一键安装（本机不需要先有项目）：
     curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | bash
 
     管道执行时 stdin 已被脚本占用，要带参数得用 bash -s --：
     curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | \
       bash -s -- --root /volume1/docker/NASphere --port 9000
 
-    装到 --root（或 INSTALL_ROOT），默认 ./dat，也就是执行命令时所在目录下的 dat/；
+    源码装到 --root（或 INSTALL_ROOT），默认 /vol2/1000/dockers/NASphere；
     那个目录已经在跑 NASphere 就等于原地升级，data/ 不会被覆盖。
 
-  用法二 本机已经有安装目录（cd 进去直接跑就是升级）：
-    cd ./dat
+  模式二 本机已有项目目录（在目录里直接执行就是部署 / 升级）：
+    cd /vol2/1000/dockers/NASphere
     ./deploy.sh
-
-  更新源码并重新部署：
-    ./deploy.sh --update
-
-  离线镜像：
-    ./deploy.sh --tar nasphere.tar.gz
-
-  卸载容器与镜像（保留数据）：
-    ./deploy.sh --uninstall
 
 选项：
 
+  --root <目录>        一键安装时源码装到哪里，默认 /vol2/1000/dockers/NASphere
   --update             从 GitHub 拉取最新版并重新部署
+  --source <压缩包>    用本地或内网的源码 tar.gz 安装，跳过 GitHub（NAS 没有 git 时用）
   --tar <文件>         加载 docker save 导出的镜像包，跳过构建
   --tag <标签>         镜像标签，默认使用 package.json version
   --port <端口>        宿主机端口，默认 18086（容器内固定监听 8080）
-  --data-dir <路径>    数据目录，默认 ./data
-  --dry-run            只显示操作，不执行
+  --data-dir <路径>    数据目录，默认 <项目目录>/data
+  --dry-run            只显示操作，不执行、不落盘
   --uninstall          删除 NASphere 容器和镜像，但保留数据
   -h, --help           显示帮助
 
@@ -185,11 +157,11 @@ NASphere 一键安装 / 部署工具
   KEEP_BACKUPS
   DOCKER_SOCK
   TZ
-  COMPOSE_PROJECT
+  GITHUB_REPO
+  GITHUB_PROXY
+  BRANCH
 
 生效顺序：命令行 > 环境变量 > .env > 默认值
-
-.env 读的是安装目录里那一份（<安装目录>/.env），不是执行命令时的当前目录。
 
 默认：
 
@@ -214,6 +186,12 @@ NASphere 一键安装 / 部署工具
   初始账号 / 密码：
     admin / admin123（镜像内置的默认值，装完立刻登录去「设置 → 安全」改掉）
 
+  初始账号：
+    admin
+
+  初始密码：
+    首次安装且没有指定 NAV_PASSWORD 时随机生成，写入 .env 并只打印一次
+
 注意：
 
   NASphere 的 Docker Socket 具有较高宿主机权限。
@@ -226,6 +204,14 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --root)
       INSTALL_ROOT="${2:?--root 后面需要跟目录}"
+      shift 2
+      ;;
+    --update)
+      UPDATE=1
+      shift
+      ;;
+    --source)
+      SOURCE="${2:?--source 后面需要跟源码 tar.gz 路径}"
       shift 2
       ;;
     --tar)
@@ -266,10 +252,35 @@ done
 # 路径与 sudo
 # ============================================================
 
-# 后面会 cd 进项目目录，所以先把镜像包路径按调用时的目录定死，
+# 后面会 cd 进项目目录，所以所有相对路径都先按调用时的目录定死，
 # 免得到时候 --tar dist/xxx.tar.gz 找不到文件
-if [ -n "$TAR" ] && [ "${TAR#/}" = "$TAR" ]; then
-  TAR="$PWD/$TAR"
+absolute_path() {
+
+  local p="$1"
+
+  case "$p" in
+    /*)
+      printf '%s' "$p"
+      ;;
+    ./*)
+      printf '%s/%s' "$PWD" "${p#./}"
+      ;;
+    *)
+      printf '%s/%s' "$PWD" "$p"
+      ;;
+  esac
+}
+
+if [ -n "$TAR" ]; then
+  TAR="$(absolute_path "$TAR")"
+fi
+
+if [ -n "$SOURCE" ]; then
+  SOURCE="$(absolute_path "$SOURCE")"
+fi
+
+if [ -n "$INSTALL_ROOT" ]; then
+  INSTALL_ROOT="$(absolute_path "$INSTALL_ROOT")"
 fi
 
 SUDO=""
@@ -328,6 +339,11 @@ run() {
         fi
         shift
         ;;
+      fs_cmd)
+        # 文件类命令：前缀就是它自己该不该带 sudo
+        if [ -n "$FSUDO" ]; then printf 'sudo '; fi
+        shift
+        ;;
       *)
         printf '%s ' "$1"
         shift
@@ -342,7 +358,8 @@ run() {
           printf '%q ' "$a"
           ;;
         NAV_PASSWORD=*)
-          printf '%q ' 'NAV_PASSWORD=***'
+          # 不能用 %q：它会把星号转义成 \*\*\*，反而看不出是掩码
+          printf 'NAV_PASSWORD=*** '
           ;;
         *)
           printf '%q ' "$a"
@@ -388,49 +405,196 @@ check_docker() {
 check_docker
 
 # ============================================================
-# 检查 Compose：新版整套部署都靠它起容器
+# 取源码：git clone / 源码压缩包
 # ============================================================
 
-check_git() {
-  command -v git >/dev/null 2>&1 || \
-    die "没有检测到 git，请先安装 git"
+has_git() {
+  command -v git >/dev/null 2>&1
 }
 
-# 先连 GitHub，失败再走国内代理。目标目录由 $2 给出，必须还不存在。
+http_get() {
+
+  local url="$1" out="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 2 -m 180 -o "$out" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 30 -O "$out" "$url"
+  else
+    return 1
+  fi
+}
+
+# 先连 GitHub，失败再走国内代理。目标目录由 $1 给出，必须还不存在。
 git_clone_repo() {
 
   local dest="$1"
 
-  if git clone "$GITHUB_REPO" "$dest" >/dev/null 2>&1; then
+  if fs_cmd git clone --branch "$BRANCH" "$GITHUB_REPO" "$dest" >/dev/null 2>&1; then
     return 0
   fi
 
-  rm -rf "$dest"
+  fs_cmd rm -rf "$dest"
 
   warn "GitHub 直连失败，改用国内代理：$GITHUB_PROXY"
 
-  git clone "${GITHUB_PROXY}/${GITHUB_REPO}" "$dest"
+  if fs_cmd git clone --branch "$BRANCH" "${GITHUB_PROXY}/${GITHUB_REPO}" "$dest" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  fs_cmd rm -rf "$dest"
+
+  return 1
 }
 
-# 在仓库目录里拉取 main；直连失败就临时改用代理，拉完把 origin 还原。
+# 在仓库目录里拉取当前分支；直连失败就临时改用代理，拉完把 origin 还原。
 git_pull_repo() {
 
-  git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
+  fs_cmd git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
 
-  if git pull --ff-only origin main; then
+  if fs_cmd git pull --ff-only origin "$BRANCH"; then
     return 0
   fi
 
   warn "GitHub 直连失败，改用国内代理重试"
 
-  git remote set-url origin "${GITHUB_PROXY}/${GITHUB_REPO}" 2>/dev/null || true
+  fs_cmd git remote set-url origin "${GITHUB_PROXY}/${GITHUB_REPO}" 2>/dev/null || true
 
-  if ! git pull --ff-only origin main; then
-    git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
+  if ! fs_cmd git pull --ff-only origin "$BRANCH"; then
+    fs_cmd git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
     return 1
   fi
 
-  git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
+  fs_cmd git remote set-url origin "$GITHUB_REPO" 2>/dev/null || true
+}
+
+# 压缩包顶层是 NASphere-<分支>/，剥掉一层就是项目根
+extract_source_tarball() {
+
+  local src="$1" dest="$2"
+
+  command -v tar >/dev/null 2>&1 || \
+    die "没有 tar，无法解压源码包"
+
+  fs_cmd rm -rf "$dest"
+
+  fs_cmd mkdir -p "$dest"
+
+  fs_cmd tar -xzf "$src" --strip-components=1 -C "$dest" || {
+    fs_cmd rm -rf "$dest"
+    return 1
+  }
+}
+
+fetch_via_tarball() {
+
+  local dest="$1" tmp url
+
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    warn "本机既没有 git 也没有 curl/wget，无法下载源码"
+    return 1
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/nasphere-src-XXXXXX.tar.gz")"
+
+  trap '[ -z "${tmp:-}" ] || rm -f "$tmp"' EXIT
+
+  for url in "$SOURCE_TARBALL" "${GITHUB_PROXY}/${SOURCE_TARBALL}"; do
+
+    log "尝试下载源码包：$url"
+
+    if http_get "$url" "$tmp"; then
+
+      if extract_source_tarball "$tmp" "$dest"; then
+        rm -f "$tmp"
+        trap - EXIT
+        return 0
+      fi
+
+      rm -f "$tmp"
+      trap - EXIT
+      return 1
+
+    fi
+
+  done
+
+  rm -f "$tmp"
+  trap - EXIT
+
+  return 1
+}
+
+# --source 指定的本地包优先；没有 git 就退回源码压缩包
+fetch_source() {
+
+  local dest="$1"
+
+  if [ -n "$SOURCE" ]; then
+    [ -f "$SOURCE" ] || \
+      die "找不到源码包：$SOURCE"
+    log "使用本地源码包：$SOURCE"
+    extract_source_tarball "$SOURCE" "$dest" || \
+      die "源码包解压失败：$SOURCE"
+    return 0
+  fi
+
+  if has_git; then
+    if git_clone_repo "$dest"; then
+      return 0
+    fi
+    warn "git clone 失败，改用源码压缩包下载"
+  else
+    warn "本机没有 git，改用源码压缩包下载（这样装完不能用 --update）"
+  fi
+
+  fetch_via_tarball "$dest"
+}
+
+looks_like_project() {
+  [ -f "$1/Dockerfile" ] && [ -f "$1/server/index.js" ]
+}
+
+fetch_and_verify() {
+
+  local dest="$1"
+
+  fetch_source "$dest" || return 1
+
+  looks_like_project "$dest" || {
+    fs_cmd rm -rf "$dest"
+    warn "下载内容不完整（缺 Dockerfile 或 server/index.js）"
+    return 1
+  }
+}
+
+# 源码没更新成功也别把部署搞死：本机版本仍可用，data/ 更不会被动
+update_repo() {
+
+  if ! has_git; then
+    warn "本机没有 git，跳过源码更新，直接用当前版本部署"
+    return 1
+  fi
+
+  if [ ! -d "$ROOT/.git" ]; then
+    warn "$ROOT 不是 Git 仓库，无法 --update，直接用当前版本部署"
+    warn "想要 Git 管理：重新执行一键安装，它会把这个目录换成 GitHub 仓库（data/ 会保留）"
+    return 1
+  fi
+
+  cd "$ROOT" || {
+    warn "无法进入 $ROOT，跳过源码更新"
+    return 1
+  }
+
+  # 有未提交改动时 pull 必然报错，先让本机版本继续跑，别动用户的东西
+  if ! fs_cmd git diff --quiet >/dev/null 2>&1 ||
+     ! fs_cmd git diff --cached --quiet >/dev/null 2>&1; then
+    warn "检测到未提交的本地改动，跳过 git pull，直接用当前版本部署"
+    return 1
+  fi
+
+  git_pull_repo
 }
 
 # ============================================================
@@ -459,99 +623,7 @@ docker_compose_cmd() {
 }
 
 # ============================================================
-# 全新安装：下载 GitHub 项目
-# ============================================================
-
-install_from_github() {
-
-  check_git
-
-  local parent
-  parent="$(dirname "$DEFAULT_ROOT")"
-
-  mkdir -p "$parent"
-
-  if [ -d "$DEFAULT_ROOT/.git" ]; then
-
-    log "检测到已有 NASphere Git 仓库"
-
-    cd "$DEFAULT_ROOT"
-
-    log "更新 GitHub 仓库"
-
-    git_pull_repo || \
-      die "GitHub 下载失败，请检查网络或代理"
-
-  elif [ -d "$DEFAULT_ROOT" ] && [ -n "$(find "$DEFAULT_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)" ]; then
-
-    warn "发现已有 NASphere 目录，但不是 Git 仓库"
-
-    local backup_dir
-    backup_dir="${DEFAULT_ROOT}.backup-$(date +%Y%m%d-%H%M%S)"
-
-    mv "$DEFAULT_ROOT" "$backup_dir"
-
-    log "旧目录已备份：$backup_dir"
-
-    if ! git_clone_repo "$DEFAULT_ROOT"; then
-      rm -rf "$DEFAULT_ROOT"
-      mv "$backup_dir" "$DEFAULT_ROOT"
-      die "GitHub 下载失败，已把原目录还原回 $DEFAULT_ROOT"
-    fi
-
-docker_compose_cmd() {
-  if [ "$COMPOSE_MODE" = v2 ]; then
-    docker_cmd compose "$@"
-  else
-
-    log "从 GitHub 下载 NASphere"
-
-    git_clone_repo "$DEFAULT_ROOT" || \
-      die "NASphere 下载失败，请检查网络或 GitHub 国内代理是否可用"
-
-  fi
-}
-
-# 所有 compose 操作都锁定「安装目录里那份文件 + 固定项目名」：
-# 不受当前目录名影响，也不会误伤机器上别的 compose 项目
-compose_cmd() {
-  docker_compose_cmd -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" "$@"
-}
-
-compose_run() {
-  run docker_compose_cmd -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" "$@"
-}
-
-# 本项目容器的 ID，一行一个。还没有 compose 文件（首次部署前）就是空。
-compose_ids() {
-  if [ ! -f "$COMPOSE_FILE" ]; then
-    return 0
-  fi
-  compose_cmd ps -q 2>/dev/null || true
-}
-
-# ============================================================
-# CPU 架构
-# ============================================================
-
-ARCH="$(uname -m 2>/dev/null || echo unknown)"
-
-case "$ARCH" in
-  x86_64 | amd64)
-    ARCH="amd64"
-    log "检测到 CPU 架构：AMD64（x86_64）"
-    ;;
-  aarch64 | arm64)
-    ARCH="arm64"
-    log "检测到 CPU 架构：ARM64（aarch64）"
-    ;;
-  *)
-    die "不支持的 CPU 架构：$ARCH（只测过 x86_64 与 aarch64）"
-    ;;
-esac
-
-# ============================================================
-# 安装目录
+# 模式一：一键安装 —— 把源码装进安装目录，但不碰已有数据
 # ============================================================
 
 # 安装目录写不写得进去。curl | bash 时 stdin 被脚本占着，sudo 真要密码是输不进去的，
@@ -579,29 +651,132 @@ resolve_write_privilege() {
   die "没有权限写 $parent，也用不了免密 sudo。请用 root 执行（curl … | sudo bash），或加 --root 指一个你有权限的目录。"
 }
 
-if [ "$LOCAL_MODE" = 1 ] && [ -z "$INSTALL_ROOT" ] && [ -z "$ENV_INSTALL_ROOT" ]; then
-  ROOT="$SCRIPT_DIR"
-  log "就地部署：$ROOT"
-  log "（$LOCAL_WHY）"
-else
-  cd "$ROOT"
+# 把旧目录里的运行数据和 .env 搬回新目录：重装不会把壁纸、图标、配置、账号弄丢
+keep_local_state() {
 
-  if [ "$UPDATE" = 1 ]; then
-    check_git
+  local old="$1" new="$2"
 
-    if [ -d "$ROOT/.git" ]; then
-
-      log "更新 NASphere GitHub 源码"
-
-      git_pull_repo || \
-        die "NASphere 更新失败，请检查网络或代理"
-
-      success "NASphere 源码更新完成"
-
+  if [ -d "$old/data" ] && [ ! -e "$new/data" ]; then
+    if fs_cmd mv "$old/data" "$new/data"; then
+      success "原有数据目录已迁回：$new/data"
     else
-      die "当前目录不是 Git 仓库，无法执行 --update；请重新执行一键安装，或手动克隆到 NASphere 目录"
+      warn "迁移 data/ 失败，请手动把 $old/data 拷回 $new/data"
     fi
   fi
+
+  if [ -f "$old/.env" ] && [ ! -e "$new/.env" ]; then
+    if fs_cmd cp -p "$old/.env" "$new/.env"; then
+      fs_cmd chmod 600 "$new/.env"
+      log "原有 .env 已保留"
+    else
+      warn "$old/.env 没能拷过来，需要的话手动拷回"
+    fi
+  fi
+}
+
+prepare_install_root() {
+
+  local parent backup_dir
+
+  parent="$(dirname "$ROOT")"
+
+  resolve_write_privilege "$parent"
+
+  if [ -d "$ROOT/.git" ]; then
+
+    log "检测到已有 NASphere Git 仓库，按最新版更新：$ROOT"
+
+    update_repo || warn "源码没有更新，继续使用本机已有版本（data/ 不受影响）"
+
+    return 0
+
+  fi
+
+  if [ -e "$ROOT" ] && [ -n "$(ls -A "$ROOT" 2>/dev/null)" ]; then
+
+    backup_dir="${ROOT}.backup-$(date +%Y%m%d-%H%M%S)"
+
+    warn "$ROOT 里已经有东西，但不是 Git 仓库；先整体备份到 $backup_dir"
+
+    if ! fs_cmd mv "$ROOT" "$backup_dir"; then
+      die "无法移动 $ROOT，请检查权限或直接用 --root 换一个目录"
+    fi
+
+    if ! fetch_and_verify "$ROOT"; then
+      fs_cmd rm -rf "$ROOT"
+      fs_cmd mv "$backup_dir" "$ROOT"
+      die "源码下载失败，已把原目录还原回 $ROOT"
+    fi
+
+    keep_local_state "$backup_dir" "$ROOT"
+
+    log "旧目录仍然保留在：$backup_dir（确认新装没问题后可以删）"
+
+    success "NASphere 源码已准备完成：$ROOT"
+
+    return 0
+
+  fi
+
+  log "下载 NASphere 源码到 $ROOT"
+
+  fetch_and_verify "$ROOT" || \
+    die "NASphere 下载失败：检查网络或 GitHub 代理，也可以先用 --source <源码包> 离线安装"
+
+  success "NASphere 源码已准备完成：$ROOT"
+}
+
+# ============================================================
+# 模式判定与源码准备
+# ============================================================
+
+if [ "$LOCAL_MODE" = 1 ]; then
+
+  ROOT="$SCRIPT_DIR"
+
+  log "模式：本机项目目录（$ROOT）"
+
+  if [ -n "$INSTALL_ROOT" ]; then
+    warn "--root 只在一键安装时生效，本机模式仍然部署当前目录"
+  fi
+
+else
+
+  ROOT="${INSTALL_ROOT:-${ENV_INSTALL_ROOT:-$DEFAULT_ROOT}}"
+
+  log "模式：一键安装（源码目录 $ROOT）"
+
+  if [ "$DRY" = 1 ]; then
+
+    printf '  [dry-run] 下载源码到 %s：git clone %s（失败改用 %s 或压缩包 %s）\n' \
+      "$ROOT" "$GITHUB_REPO" "$GITHUB_PROXY" "$SOURCE_TARBALL"
+
+    printf '  [dry-run] 随后按本机模式继续：构建或加载镜像 → 备份 data → 起容器 → 健康检查\n'
+
+    success "dry-run 完成，没有下载、没有落盘"
+
+    exit 0
+
+  fi
+
+  if [ "$UNINSTALL" = 1 ]; then
+    log "卸载不需要源码，跳过下载"
+  else
+    prepare_install_root
+  fi
+
+fi
+
+if [ "$LOCAL_MODE" = 1 ] && [ "$UPDATE" = 1 ]; then
+
+  log "更新 NASphere GitHub 源码"
+
+  if update_repo; then
+    success "NASphere 源码更新完成"
+  else
+    warn "源码没有更新，继续使用本机已有版本"
+  fi
+
 fi
 
 # 卸载时目录可能早就不在了：那种情况按镜像名和 compose 项目清一遍就够
@@ -617,10 +792,37 @@ if [ ! -d "$ROOT" ]; then
   fi
 fi
 
-COMPOSE_FILE="$ROOT/docker-compose.yml"
+if [ ! -d "$ROOT" ]; then
+
+  if [ "$UNINSTALL" = 1 ]; then
+    warn "目录不存在：$ROOT，只按容器名和镜像名卸载"
+    ROOT="$PWD"
+  else
+    die "找不到项目目录：$ROOT"
+  fi
+
+fi
 
 cd "$ROOT" || \
   die "无法进入目录：$ROOT"
+
+# 只卸载容器和镜像时，项目文件缺了也能走完
+if [ "$UNINSTALL" = 1 ] && ! looks_like_project "$ROOT"; then
+
+  log "按卸载模式继续（不需要 Dockerfile 与 server/index.js）"
+
+else
+
+  [ -f Dockerfile ] || \
+    die "没有找到 Dockerfile"
+
+  [ -f server/index.js ] || \
+    die "没有找到 server/index.js"
+
+  [ -f package.json ] || \
+    die "没有找到 package.json"
+
+fi
 
 # ============================================================
 # 生效优先级：命令行 > 环境变量 > .env > 默认值
@@ -644,6 +846,11 @@ DOTENV_TAG=""
 DOTENV_HEALTH_WAIT=""
 DOTENV_KEEP_BACKUPS=""
 DOTENV_DOCKER_SOCK=""
+DOTENV_NAV_USER=""
+DOTENV_NAV_PASSWORD=""
+DOTENV_SESSION_DAYS=""
+DOTENV_MAX_BODY=""
+DOTENV_TZ=""
 
 if [ -f "$ROOT/.env" ]; then
 
@@ -664,6 +871,11 @@ if [ -f "$ROOT/.env" ]; then
   HEALTH_WAIT=""
   KEEP_BACKUPS=""
   DOCKER_SOCK=""
+  NAV_USER=""
+  NAV_PASSWORD=""
+  SESSION_DAYS=""
+  MAX_BODY=""
+  TZ=""
 
   set -a
   # shellcheck disable=SC1090
@@ -681,6 +893,11 @@ if [ -f "$ROOT/.env" ]; then
   DOTENV_HEALTH_WAIT="$HEALTH_WAIT"
   DOTENV_KEEP_BACKUPS="$KEEP_BACKUPS"
   DOTENV_DOCKER_SOCK="$DOCKER_SOCK"
+  DOTENV_NAV_USER="$NAV_USER"
+  DOTENV_NAV_PASSWORD="$NAV_PASSWORD"
+  DOTENV_SESSION_DAYS="$SESSION_DAYS"
+  DOTENV_MAX_BODY="$MAX_BODY"
+  DOTENV_TZ="$TZ"
 
 fi
 
@@ -701,8 +918,6 @@ DOTENV_KEEP_BACKUPS=""
 DOTENV_DOCKER_SOCK=""
 DOTENV_TZ=""
 
-# NAV_USER / NAV_PASSWORD / SESSION_DAYS / MAX_BODY / TZ 没有命令行开关，
-# 环境和 .env 里有哪个就用哪个
 IMAGE="${CLI_IMAGE:-${ENV_IMAGE:-${DOTENV_IMAGE:-local/nasphere}}}"
 CONTAINER="${CLI_CONTAINER:-${ENV_CONTAINER:-${DOTENV_CONTAINER:-nasphere}}}"
 HOST_PORT="${CLI_HOST_PORT:-${ENV_HOST_PORT:-${DOTENV_HOST_PORT:-18086}}}"
@@ -711,6 +926,16 @@ HEALTH_WAIT="${CLI_HEALTH_WAIT:-${ENV_HEALTH_WAIT:-${DOTENV_HEALTH_WAIT:-40}}}"
 KEEP_BACKUPS="${CLI_KEEP_BACKUPS:-${ENV_KEEP_BACKUPS:-${DOTENV_KEEP_BACKUPS:-5}}}"
 DOCKER_SOCK="${CLI_DOCKER_SOCK:-${ENV_DOCKER_SOCK:-${DOTENV_DOCKER_SOCK:-/var/run/docker.sock}}}"
 TAG="${CLI_TAG:-${ENV_TAG:-${DOTENV_TAG:-$VERSION}}}"
+
+# 这几个没有命令行开关，但同样得按 环境变量 > .env > 默认值 排：
+# 上面 source .env 用的是 set -a，不重新算一遍的话 .env 会反过来盖掉环境变量
+NAV_USER="${ENV_NAV_USER:-${DOTENV_NAV_USER:-admin}}"
+NAV_PASSWORD="${ENV_NAV_PASSWORD:-${DOTENV_NAV_PASSWORD:-}}"
+SESSION_DAYS="${ENV_SESSION_DAYS:-${DOTENV_SESSION_DAYS:-30}}"
+MAX_BODY="${ENV_MAX_BODY:-${DOTENV_MAX_BODY:-8388608}}"
+TZ="${ENV_TZ:-${DOTENV_TZ:-Asia/Shanghai}}"
+
+export NAV_USER NAV_PASSWORD SESSION_DAYS MAX_BODY TZ
 
 NEW_REF="$IMAGE:$TAG"
 
@@ -785,6 +1010,77 @@ FIRST_RUN=0
 [ -f "$DATA_DIR/auth.json" ] || FIRST_RUN=1
 
 # ============================================================
+# 首次安装的初始密码
+# ============================================================
+
+# admin/admin123 是公开仓库里人人可查的默认值，而这个容器还挂着 docker.sock。
+# 所以首装时没人指定密码，就随机生成一个，别让用户的第一台机器是裸奔的。
+PASSWORD_GENERATED=0
+
+gen_password() {
+
+  local pw="" chunk=""
+
+  # 只用字母数字：要塞进 .env、-e 参数和 compose 插值里，不掺杂需要转义的字符
+  while [ "${#pw}" -lt 16 ]; do
+
+    if [ ! -r /dev/urandom ]; then
+      break
+    fi
+
+    chunk="$(head -c 512 /dev/urandom 2>/dev/null | tr -dc 'A-Za-z0-9')"
+
+    [ -n "$chunk" ] || break
+
+    pw="$pw$chunk"
+
+  done
+
+  pw="${pw:0:16}"
+
+  if [ "${#pw}" -lt 16 ] && command -v openssl >/dev/null 2>&1; then
+    pw="$(openssl rand -hex 8)"
+  fi
+
+  printf '%s' "$pw"
+}
+
+write_env_password() {
+
+  local line
+
+  if [ -f "$ROOT/.env" ]; then
+    line="$(printf '\n# deploy.sh 首次安装自动生成（%s）\nNAV_PASSWORD=%s\n' "$(date +%Y-%m-%d)" "$NAV_PASSWORD")"
+    printf '%s' "$line" >>"$ROOT/.env"
+  else
+    printf 'NAV_USER=%s\nNAV_PASSWORD=%s\n' "$NAV_USER" "$NAV_PASSWORD" >"$ROOT/.env"
+  fi
+}
+
+if [ "$FIRST_RUN" = 1 ] &&
+   [ -z "$NAV_PASSWORD" ] &&
+   [ "$UNINSTALL" != 1 ] &&
+   [ "$DRY" != 1 ]; then
+
+  NAV_PASSWORD="$(gen_password)"
+
+  [ -n "$NAV_PASSWORD" ] || \
+    die "无法生成随机初始密码：请在 .env 或环境变量里设置 NAV_PASSWORD 后重试"
+
+  PASSWORD_GENERATED=1
+
+  export NAV_PASSWORD
+
+  # 密码只在结尾打印一次，所以必须有个地方留档；.env 已在 .gitignore 与 .dockerignore 里
+  if write_env_password && chmod 600 "$ROOT/.env" 2>/dev/null; then
+    log "随机初始密码已写入 $ROOT/.env（权限 600）"
+  else
+    warn "写不进 $ROOT/.env，随机初始密码只在这次输出里显示一次"
+  fi
+
+fi
+
+# ============================================================
 # 显示配置
 # ============================================================
 
@@ -792,11 +1088,17 @@ log "=========================================="
 log "          NASphere 部署"
 log "=========================================="
 
+log "项目目录：$ROOT"
+log "运行模式：$( [ "$LOCAL_MODE" = 1 ] && echo '本机已有项目' || echo '一键安装（源码本次下载）' )"
 log "镜像：$NEW_REF"
 log "容器：$CONTAINER"
 log "端口：$HOST_PORT → 容器内 8080"
 log "数据：$DATA_DIR"
 log "时区：$TZ"
+
+if [ "$FIRST_RUN" = 1 ]; then
+  log "首次启动：账号 $NAV_USER"
+fi
 
 if [ -n "$COMPOSE_MODE" ]; then
   log "部署方式：$([ "$COMPOSE_MODE" = v2 ] && echo 'docker compose' || echo docker-compose)"
@@ -937,9 +1239,7 @@ fi
 # 生成 docker-compose.yml
 # ============================================================
 
-# 每次部署都按本次算好的参数重写它：喂给自己的容器，参数不能丢。
-# 目录里如果躺着一份手写的 compose（比如从 GitHub 上直接拷下来那份），先备份再覆盖。
-render_compose() {
+run fs_cmd mkdir -p "$DATA_DIR"
 
   printf '# %s，请勿手改：下次部署会整个重写。\n' "$GENERATED_KEY"
   printf '# 要长期改端口或数据目录，就写在 %s/.env 里的 HOST_PORT / DATA_DIR，然后重跑 ./deploy.sh。\n' "$ROOT"
@@ -1204,6 +1504,9 @@ up_with() {
     export TAG="$tag"
     export CONTAINER HOST_PORT DATA_DIR DOCKER_SOCK
 
+    # 账号密码同理：compose 文件里那两个 ${...:-默认值} 要看到本次算好的值
+    export NAV_USER NAV_PASSWORD SESSION_DAYS MAX_BODY TZ
+
     run docker_compose_cmd up -d --remove-orphans
 
     return 0
@@ -1234,11 +1537,11 @@ up_with() {
     --restart unless-stopped \
     --init \
     -p "$HOST_PORT:8080" \
-    -e "NAV_USER=${NAV_USER:-admin}" \
-    -e "NAV_PASSWORD=${NAV_PASSWORD:-}" \
-    -e "SESSION_DAYS=${SESSION_DAYS:-30}" \
-    -e "MAX_BODY=${MAX_BODY:-8388608}" \
-    -e "TZ=${TZ:-Asia/Shanghai}" \
+    -e "NAV_USER=$NAV_USER" \
+    -e "NAV_PASSWORD=$NAV_PASSWORD" \
+    -e "SESSION_DAYS=$SESSION_DAYS" \
+    -e "MAX_BODY=$MAX_BODY" \
+    -e "TZ=$TZ" \
     -v "$DATA_DIR:/data" \
     ${sock[@]+"${sock[@]}"} \
     "$ref"
@@ -1391,12 +1694,27 @@ if [ "$OK" = 1 ]; then
 
     printf '\033[33m------------------------------------------\033[0m\n'
 
-    printf '初始账号：%s\n' "${NAV_USER:-admin}"
-    printf '初始密码：%s\n' "${NAV_PASSWORD:-admin123}"
-    printf '（未设置 NAV_PASSWORD 时服务端用默认密码 admin123）\n'
+    printf '首次启动，登录账号：\n'
+    printf '  用户名：%s\n' "$NAV_USER"
+    printf '  密码　：%s\n' "$NAV_PASSWORD"
 
     printf '\n'
-    warn "首次登录后请立即在「设置 → 安全」修改账号和密码"
+
+    if [ "$PASSWORD_GENERATED" = 1 ]; then
+
+      printf '这个密码是本次安装随机生成的，不是默认密码。\n'
+      printf '已留档在：%s/.env（权限 600，忘记密码时在这里查）\n' "$ROOT"
+
+    else
+
+      printf '密码来自 NAV_PASSWORD（环境变量或 .env）。\n'
+
+    fi
+
+    printf '\n'
+    warn "请立刻记下密码，并登录后在「设置 → 安全」改成自己的"
+
+    printf '\n'
 
   fi
 
