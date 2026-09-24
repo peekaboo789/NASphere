@@ -1,0 +1,25 @@
+node_modules
+data
+dist
+.deploy-backup
+# 本机自测留下的东西（含密码哈希与会话密钥），一律不进构建上下文
+.demo-data
+.pre-clean-backup
+.sunpanel-import
+.demo-*
+# make-image-offline.js 拉的 node 基础层，四百多兆，绝不该跟进构建上下文
+.image-cache
+_mock-docker.js
+.sample-seed.js
+*.tar.gz
+*.sha256
+.git
+.env
+*.log
+Dockerfile
+docker-compose.yml
+README.md
+DEPLOY.md
+deploy.sh
+make-image.sh
+make-image-offline.js
