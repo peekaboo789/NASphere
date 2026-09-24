@@ -7,7 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 
-const PORT = Number(process.env.PORT || 8080);
+const PORT = Number(process.env.PORT || 18086);
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = path.resolve(process.env.DATA_DIR || '/data');
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -655,7 +655,7 @@ function gcUploads(cfg) {
   }
 }
 
-const extByMime = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'image/avif': '.avif', 'image/svg+xml': '.svg' };
+const extByMime = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'image/avif': '.avif', 'image/svg+xml': '.svg', 'image/x-icon': '.ico', 'image/vnd.microsoft.icon': '.ico' };
 
 /* ---------- Docker：容器实时状态 + 启停，零依赖直接说 HTTP ---------- */
 
@@ -969,7 +969,7 @@ function handleMediaUpload(req, res) {
       fs.writeFileSync(path.join(UPLOAD_DIR, name), parsed.buf);
       saved.push('/media/' + name);
     }
-    if (!saved.length) return send(res, 400, { error: '仅支持 png / jpeg / gif / webp / avif，单张不超过 5MB' });
+    if (!saved.length) return send(res, 400, { error: '仅支持 png / jpeg / gif / webp / avif / svg / ico，单张不超过 5MB' });
     send(res, 200, { urls: saved });
   }).catch((e) => send(res, e.status || 400, { error: e.message }));
 }
