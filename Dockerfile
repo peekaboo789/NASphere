@@ -2,7 +2,7 @@ FROM node:22-alpine
 
 ENV NODE_ENV=production \
     PORT=18086 \
-    DATA_DIR=/data
+    DATA_DIR=/app/data
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ COPY package.json ./
 COPY server ./server
 COPY public ./public
 
-RUN mkdir -p /data && chmod 700 /data
+RUN mkdir -p /app/data && chmod 700 /app/data
 
 EXPOSE 18086
 

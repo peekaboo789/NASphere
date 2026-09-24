@@ -25,9 +25,10 @@
 * **一条命令安装**
 
   * 支持 GitHub 一键安装
-  * 默认使用 GitHub 加速地址获取项目
-  * 自动下载源码、构建镜像、启动容器、健康检查
-  * 升级与重装不覆盖 `data/`，首装随机生成初始密码
+  * 默认使用 GitHub 加速地址获取脚本
+  * 自动检测架构、生成 compose、拉取 GHCR 镜像、启动容器、健康检查
+  * 不需要源码，也不在本机 build 镜像
+  * 升级与重装不覆盖 `data/`
   * 部署失败自动回滚
 * **零构建依赖**
 
@@ -91,27 +92,34 @@ curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NA
 脚本会自动：
 
 ```text
-下载 NASphere 源码
+检测 CPU 架构
       ↓
-检查 Docker
+准备安装目录
       ↓
-构建 NASphere 镜像
+生成 docker-compose.yml
       ↓
-创建 / 更新容器
+拉取 GHCR 镜像
+      ↓
+docker compose up -d
       ↓
 健康检查
       ↓
 输出访问地址
 ```
 
+不需要源码，也不在本机 build 镜像——镜像是公开发布在 `ghcr.io/peekaboo789/nasphere` 上的，脚本只负责 `docker pull`。
+
 默认：
 
 ```text
-项目目录：/vol2/1000/dockers/NASphere
-容器名称：nasphere
+安装目录：./dat
+镜像：ghcr.io/peekaboo789/nasphere:1.0.0
+compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
-数据目录：./data
+数据目录：./data（就在安装目录里）
 ```
+
+`./dat` 是相对执行命令时所在的目录，想装别处就加 `--root`。
 
 换安装目录或端口（管道执行必须带 `bash -s --` 才传得进参数）：
 
@@ -120,9 +128,9 @@ curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NA
   bash -s -- --root /volume1/docker/NASphere --port 9000
 ```
 
-首次安装如果没有指定密码，会随机生成一个，只打印一次，并留档在项目目录的 `.env`。
+首次启动的账号密码是镜像内置的 `admin` / `admin123`，装完立刻登录去「设置 → 安全」改掉（这个容器还挂着 `docker.sock`，页面账号等于能启停宿主机上的容器）。
 
-同一个目录再执行一次就是原地升级：`data/` 和 `.env` 原样保留，壁纸、图标、配置、账号都不会丢。
+同一个目录再执行一次就是原地升级：`data/` 原样保留，壁纸、图标、配置、账号都不会丢；compose 文件每次由脚本重写。
 
 安装完成后访问：
 
@@ -136,45 +144,231 @@ http://<NAS-IP>:18086
 http://192.168.8.99:18086
 ```
 
-> 如果你的 NAS Docker 无法正常拉取 `node:22-alpine`，请先解决 Docker 镜像源问题，或者使用下面的离线镜像方式。
+> `ghcr.io` 上目前只发布了 `linux/amd64`。ARM 机型（群晖多数是 `arm64/v8`）这条命令会在拉镜像那一步报 `no matching manifest`，请改用下面的离线镜像方式。
 
 ---
 
-## 方式二：docker compose部署
+## 方式二：本机已经有安装目录
 
-推荐使用
+`cd` 进上次装好的目录直接跑就是升级：
 
-services:
-  nasphere:
-    image: ghcr.io/peekaboo789/nasphere:1.0.0
-    container_name: nasphere
+```bash
+cd ./dat
 
-    restart: unless-stopped
+chmod +x deploy.sh
 
-    ports:
-      - "18086:18086"
+./deploy.sh
+```
 
-    volumes:
-      - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
+脚本旁边就是本脚本生成的 `docker-compose.yml`（或者整个 NASphere 项目目录）时走就地部署，不会再下载任何东西。
 
-    environment:
-      TZ: Asia/Shanghai
+部署脚本会自动：
 
+1. 检测 CPU 架构（`x86_64` / `aarch64`，其余直接退出）
+2. 检查 Docker
+3. 备份 `data/config.json`
+4. 备份 `data/auth.json`
+5. 生成 `docker-compose.yml`
+6. 从 GHCR 拉镜像
+7. `docker compose up -d`
+8. 检查 `/api/health`
+9. 启动失败自动回滚旧镜像
 
+---
+
+# 🔄 更新 NASphere
+
+在安装目录里执行：
+
+```bash
+./deploy.sh --tag 1.1.0
+```
+
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.0`），ghcr 上同名标签被重推过时它会拉回新的那份。
+
+一键安装过的那条命令也可以直接重跑。
+
+项目数据默认保存在：
+
+```text
+./data
+```
+
+升级只换镜像，数据目录里的这些东西一个字节都不动：
+
+```text
+config.json
+auth.json
+uploads/
+```
+
+安装目录里那份 `.env` 也只被脚本读取、不会被改写。
+
+因此正常升级不会影响已经设置好的主页，登录账号密码也不变。
+
+---
 
 # 🔐 首次登录
 
-用 `deploy.sh` 一键安装、且没有预先指定密码时，初始密码随机生成：
+首次启动的凭据是镜像内置的默认值：
 
 ```text
 用户名：admin
-密码　：<admin123>
+密码　：admin123
 ```
 
+这是公开仓库上人人可查的默认密码，而且默认部署还会把 `docker.sock` 挂进容器（页面账号等于能启停宿主机上的容器）。**第一次登录后请立即进入：**
 
+```text
+设置 → 安全
+```
 
+修改账号和密码。改过一次之后 `data/auth.json` 就是唯一的凭据来源，之后重装、升级都不会把它换回去。
 
+服务端另有两个环境变量 `NAV_USER` / `NAV_PASSWORD`，只在 `data/auth.json` 不存在时用于初始化；`deploy.sh` 不注入它们，需要时用 `docker run -e` 或 compose 的 `environment` 自己带上。
+
+> 注意：`auth.json` 已经存在时，这两个变量不会再改动现有账号密码。
+
+---
+
+# 📦 Docker Compose
+
+仓库里的 `docker-compose.yml` 是写死值的最小版本（镜像、端口、卷、`TZ` 都不做 `${}` 插值，也不读 `.env`）。`./deploy.sh` 不用它——脚本会在安装目录里生成一份自己的。
+
+只用这一个文件也能装：镜像公开发布在 GitHub Container Registry，本机不需要源码、不需要 Dockerfile。
+
+```bash
+docker compose up -d
+```
+
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.0`，拉下来直接起容器。
+
+默认访问：
+
+```text
+http://<NAS-IP>:18086
+```
+
+`docker-compose.yml` 里 `image`、端口、卷都是写死的值，不做 `.env` 插值。
+
+改端口就直接改 `ports` 冒号左边那一位（容器内固定 `18086`，右边不要动）：
+
+```text
+- "9000:18086"
+```
+
+然后重新 up：
+
+```bash
+docker compose up -d
+```
+
+访问：
+
+```text
+http://<NAS-IP>:9000
+```
+
+升级版本时把 `image` 的标签一起改（同一个标签的内容变了就先 `docker compose pull`）。
+
+`ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
+
+```bash
+docker load -i nasphere-1.0.0-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.0 ghcr.io/peekaboo789/nasphere:1.0.0
+docker compose up -d
+```
+
+`ghcr.io` 上目前只发布了 linux/amd64 一份 manifest，ARM 机型（群晖多数是 arm64/v8）在线拉会报 `no matching manifest for linux/arm64/v8`——按 `uname -m` 挑 `linux-arm64` 那份离线包，上面那两行 `docker load` / `docker tag` 照做即可。多架构镜像推上来之后这条限制就没了。
+
+这条路线和 `./deploy.sh` 二选一：两边都对外占 `18086`，后起的那个会报 `port is already allocated`（`deploy.sh` 在安装目录里生成的是它自己那份 compose）。切换前先停掉另一边——脚本起的容器现在叫 `nasphere-nasphere-1`，用 `cd ./dat && docker compose down` 收尾。
+
+---
+
+# 🐳 Docker Run
+
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.0 .`）：
+
+```bash
+docker pull ghcr.io/peekaboo789/nasphere:1.0.0
+```
+
+然后：
+
+```bash
+docker run -d \
+  --name nasphere \
+  --restart unless-stopped \
+  -p 18086:18086 \
+  -e NAV_USER='admin' \
+  -e NAV_PASSWORD='你自己的密码' \
+  -v "$(pwd)/data:/app/data" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/peekaboo789/nasphere:1.0.0
+```
+
+`-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
+
+其中：
+
+```text
+18086:18086
+```
+
+表示：
+
+```text
+NAS 宿主机 18086 → NASphere 容器 18086
+```
+
+容器内部固定监听 `18086`（镜像里 `ENV PORT=18086`），冒号右边那一位不要跟着改。
+
+数据卷那一位同理：镜像里 `ENV DATA_DIR=/app/data`，宿主机目录挂到 `/app/data` 才会被读到。
+
+---
+
+# 📦 离线部署
+
+NAS 到 `ghcr.io` 不通（或者机型是 ARM，那边暂时只有 amd64 那份 manifest）时，在另一台机器上做出镜像包传过去：
+
+```bash
+./make-image.sh
+```
+
+生成：
+
+```text
+dist/nasphere-<版本>.tar.gz
+dist/nasphere-<版本>.sha256
+```
+
+电脑上连 Docker 都没有就用 `node make-image-offline.js`，它自己去镜像仓库匿名拉基础层拼包，amd64 / arm64 各出一份。
+
+将镜像包传到 NAS 后：
+
+```bash
+./deploy.sh --tar dist/nasphere-1.0.0-linux-amd64.tar.gz
+```
+
+脚本会：
+
+```text
+加载镜像
+ ↓
+按包里的 RepoTags 重新标记成 compose 要用的那个名字
+ ↓
+备份 data
+ ↓
+生成 docker-compose.yml
+ ↓
+docker compose up -d
+ ↓
+健康检查
+```
+
+`--tar` 这条完全跳过了 `docker pull`，所以 ARM 机型就用它（包挑 `linux-arm64` 那份），名字对不上脚本自动 `docker tag`。
+
+---
 
 # ✨ 功能
 
@@ -881,6 +1075,16 @@ NASphere/
     └── uploads/
 ```
 
+`./deploy.sh` 装出来的目录不是这个结构，它不需要源码，里面只有：
+
+```text
+dat/
+├── docker-compose.yml      # 每次部署由脚本按参数重写
+└── data/                   # 你的全部状态
+```
+
+脚本不往那儿写自己：下次升级重跑那条 `curl … | bash`（它认得这个目录），或者把 `deploy.sh` 自己放进去 `cd` 进去跑。
+
 ---
 
 # 🛠️ 环境变量
@@ -891,35 +1095,37 @@ NASphere/
 | -------------- | ----------------------------- | ------------- |
 | `PORT`         | `18086`                       | 容器内服务监听端口（对外端口用 `HOST_PORT`，默认 18086） |
 | `HOST`         | `0.0.0.0`                     | 监听地址          |
-| `DATA_DIR`     | `/data`                       | 数据目录          |
+| `DATA_DIR`     | `/app/data`                   | 数据目录（镜像里 `ENV DATA_DIR`，宿主机的 `./data` 要挂到这个点） |
 | `NAV_USER`     | `admin`                       | 首次初始化账号       |
-| `NAV_PASSWORD` | `admin123`                    | 首次初始化密码，`deploy.sh` 首装会随机生成并写进 `.env` |
+| `NAV_PASSWORD` | `admin123`                    | 首次初始化密码（`deploy.sh` 和仓库那份 compose 都不注入它，只有 `docker run -e` 那条路线能带） |
 | `SESSION_DAYS` | `30`                          | 登录有效期         |
 | `MAX_BODY`     | `8388608`                     | 请求体上限         |
 | `DOCKER_HOST`  | `unix:///var/run/docker.sock` | Docker API 地址 |
 
-## deploy.sh / Compose
+## deploy.sh
 
-| 变量             | 默认值                    | 说明            |
-| -------------- | ---------------------- | ------------- |
-| `HOST_PORT`    | `18086`                | NAS 宿主机端口     |
-| `IMAGE`        | `local/nasphere`       | Docker 镜像     |
-| `TAG`          | package.json version   | 镜像标签          |
-| `CONTAINER`    | `nasphere`             | 容器名称          |
-| `DATA_DIR`     | `./data`               | NASphere 数据目录 |
-| `HEALTH_WAIT`  | `40`                   | 健康检查等待时间      |
-| `KEEP_BACKUPS` | `5`                    | 保留备份数量        |
-| `DOCKER_SOCK`  | `/var/run/docker.sock` | Docker Socket |
-| `INSTALL_ROOT` | `/vol2/1000/dockers/NASphere` | 一键安装时源码装到哪里，等价于 `--root` |
-| `GITHUB_REPO`  | `https://github.com/peekaboo789/NASphere.git` | 源码地址，用自己的 fork 就改它 |
-| `GITHUB_PROXY` | `https://gh-proxy.com` | GitHub 加速前缀，留空则只走直连 |
-| `BRANCH`       | `main`                 | 拉取的分支         |
+下面这些只有 `deploy.sh` 读（手工 `docker compose up -d` 不读，仓库那份 `docker-compose.yml` 里是写死的值）：
 
-`deploy.sh` 还会读 `NAV_USER`、`NAV_PASSWORD`、`SESSION_DAYS`、`MAX_BODY`、`TZ`，生效顺序：
+| 变量              | 默认值                        | 说明            |
+| --------------- | -------------------------- | ------------- |
+| `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
+| `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
+| `TAG`           | `1.0.0`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
+| `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
+| `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
+| `COMPOSE_PROJECT` | `nasphere`                | compose 项目名，容器叫 `<项目名>-nasphere-1` |
+| `HEALTH_WAIT`   | `40`                       | 健康检查等待秒数      |
+| `KEEP_BACKUPS`  | `5`                        | `data/.deploy-backup/` 保留几份 |
+| `DOCKER_SOCK`   | `/var/run/docker.sock`     | 挂进容器的 Docker Socket，找不到就不挂 |
+
+`.env` 只在安装目录里那份生效（`<安装目录>/.env`，不是执行命令时的当前目录），生效顺序：
 
 ```text
 命令行 > 环境变量 > .env > 默认值
 ```
+
+`deploy.sh` 不再碰账号密码：`NAV_USER` / `NAV_PASSWORD` / `SESSION_DAYS` / `MAX_BODY` 都不由它注入，要改就走服务端的环境变量（`docker run -e` 或自己编辑生成出来的 compose）或页面里的「设置 → 安全」。
 
 ---
 
@@ -932,16 +1138,10 @@ NASphere/
 修改宿主端口。
 
 ```bash
-./deploy.sh --update
-```
-
-从 GitHub 拉最新源码后重新部署。
-
-```bash
 ./deploy.sh --root /volume1/docker/NASphere
 ```
 
-一键安装时指定源码装到哪里。
+指定安装目录，目录里没有就建，已经有 `data/` 就算原地升级。
 
 ```bash
 ./deploy.sh --data-dir /volume1/docker/nasphere/data
@@ -953,7 +1153,7 @@ NASphere/
 ./deploy.sh --tag 1.2.0
 ```
 
-指定镜像版本。
+指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.0`。
 
 ```bash
 ./deploy.sh --dry-run
@@ -962,22 +1162,22 @@ NASphere/
 只显示操作，不执行。
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.0.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.0-linux-arm64.tar.gz
 ```
 
-使用离线镜像。
-
-```bash
-./deploy.sh --source /tmp/NASphere-src.tar.gz
-```
-
-使用本地源码包安装，跳过 GitHub。
+使用离线镜像，跳过 `docker pull`。
 
 ```bash
 ./deploy.sh --uninstall
 ```
 
-删除容器和镜像，`data/` 会原样保留。
+删掉本项目的容器和镜像，`data/` 会原样保留。
+
+```bash
+./deploy.sh --help
+```
+
+看完整参数、环境变量和默认值。
 
 ---
 
@@ -1015,7 +1215,9 @@ npm install
 
 ---
 
-# 🐳 Docker 基础镜像
+# 🐳 自己构建镜像
+
+正常路线不需要这一节：镜像已经在 `ghcr.io/peekaboo789/nasphere` 上，`deploy.sh` 和 compose 都是直接拉。只有改了 `server/` 或 `public/` 想跑自己的那份时才自己 build。
 
 NASphere 使用：
 
@@ -1040,8 +1242,10 @@ docker tag docker.m.daocloud.io/library/node:22-alpine node:22-alpine
 再执行：
 
 ```bash
-docker build -t local/nasphere:latest .
+docker build -t nasphere-dev .
 ```
+
+起来的就是 `nasphere-dev`，跟 §部署 那几条路线互不影响。
 
 ---
 

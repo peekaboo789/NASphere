@@ -505,8 +505,8 @@ function appLayerFiles() {
     if (!fs.existsSync(abs)) die(`项目里缺 ${p}/，是不是在项目根目录跑的？`);
     entries.push(...listCopy(abs, 'app/' + p));
   }
-  // Dockerfile 里 RUN mkdir -p /data && chmod 700 /data 的效果，手工补一个目录项
-  entries.push({ arc: 'data/', dir: true, mode: 0o700, abs: ROOT });
+  // Dockerfile 里 RUN mkdir -p /app/data && chmod 700 /app/data 的效果，手工补一个目录项
+  entries.push({ arc: 'app/data/', dir: true, mode: 0o700, abs: ROOT });
   const seen = new Set();
   const files = [];
   for (const e of entries) {
@@ -553,7 +553,7 @@ function sha256OfFile(p) {
 /* ---------------- 镜像配置 ---------------- */
 
 // Dockerfile 里那几条指令按同样顺序落到 config 上
-const APP_ENV = { NODE_ENV: 'production', PORT: '18086', DATA_DIR: '/data' };
+const APP_ENV = { NODE_ENV: 'production', PORT: '18086', DATA_DIR: '/app/data' };
 const HEALTHCHECK = {
   Test: ['CMD-SHELL', 'node -e "require(\'http\').get(\'http://127.0.0.1:\'+(process.env.PORT||18086)+\'/api/health\',r=>process.exit(r.statusCode===200?0:1)).on(\'error\',()=>process.exit(1))"'],
   Interval: 60000000000,
@@ -593,7 +593,7 @@ function buildImageConfig(baseCfg, baseManifest, appDiffId, stampIso) {
   const history = Array.isArray(baseCfg.history) ? baseCfg.history.slice() : [];
   history.push({
     created: stampIso,
-    created_by: 'COPY package.json server/ public/ /app/ ; RUN mkdir -p /data && chmod 700 /data',
+    created_by: 'COPY package.json server/ public/ /app/ ; RUN mkdir -p /app/data && chmod 700 /app/data',
     empty_layer: false,
   });
   return {
@@ -832,7 +832,7 @@ async function buildOne(arch) {
   // 仓库里同一 tag 会随时间更新，记下来源 digest 免得下次以为还是它
   const stampIso = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-  log('打应用层（package.json + server/ + public/ + /data）');
+  log('打应用层（package.json + server/ + public/ + /app/data）');
   const appLayerFile = path.join(cacheDir, `app-layer-${ARG.tag}-${arch}.tar`);
   const app = await buildAppLayer(appLayerFile);
   log(`  应用层 ${app.files.length} 项、${MB(app.size)}，sha256 ${app.digest.slice(0, 16)}…`);
