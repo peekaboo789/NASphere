@@ -27,8 +27,7 @@
   * 支持 GitHub 一键安装
   * 默认使用 GitHub 加速地址获取项目
   * 自动下载源码、构建镜像、启动容器、健康检查
-  * 升级与重装不会覆盖 `data/`，壁纸、图标、账号原样保留
-  * 首次安装随机生成初始密码，不写成所有人一样的默认值
+  * 升级与重装不覆盖 `data/`，首装随机生成初始密码
   * 部署失败自动回滚
 * **零构建依赖**
 
@@ -92,9 +91,7 @@ curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NA
 脚本会自动：
 
 ```text
-GitHub（gh-proxy.com 加速）
-      ↓
-下载 NASphere 源码到项目目录
+下载 NASphere 源码
       ↓
 准备安装目录
       ↓
@@ -109,35 +106,25 @@ docker compose up -d
 输出访问地址
 ```
 
-直连能通时会先试直连，失败才改用 `gh-proxy.com`；连 `git` 都没有时退回下载源码压缩包。
-
 默认：
 
 ```text
 项目目录：/vol2/1000/dockers/NASphere
 容器名称：nasphere
 宿主端口：18086
-数据目录：/vol2/1000/dockers/NASphere/data
+数据目录：./data
 ```
 
-装到别的目录、换端口：
+换安装目录或端口（管道执行必须带 `bash -s --` 才传得进参数）：
 
 ```bash
 curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/peekaboo789/NASphere/main/deploy.sh | \
   bash -s -- --root /volume1/docker/NASphere --port 9000
 ```
 
-管道执行时 stdin 已经被脚本占着，所以带参数必须走 `bash -s --`。
+首次安装如果没有指定密码，会随机生成一个，只打印一次，并留档在项目目录的 `.env`。
 
-首次安装会随机生成登录密码，只在终端打印一次，并写进：
-
-```text
-/vol2/1000/dockers/NASphere/.env
-```
-
-权限 `600`，忘记密码时在这里查。
-
-同一个目录再次执行这条命令就是原地升级：`data/` 与 `.env` 会原样搬回新源码目录，壁纸、图标、配置、账号都不会丢。
+同一个目录再执行一次就是原地升级：`data/` 和 `.env` 原样保留，壁纸、图标、配置、账号都不会丢。
 
 安装完成后访问：
 
@@ -185,21 +172,15 @@ chmod +x deploy.sh
 
 # 🔄 更新 NASphere
 
-已经在跑 NASphere 的目录，直接执行：
+在项目目录里执行：
 
 ```bash
-cd /vol2/1000/dockers/NASphere
-
 ./deploy.sh --update
 ```
 
 会先从 GitHub 拉最新源码，再重新构建部署。
 
-一键安装过的版本也可以重复执行那条命令：
-
-```bash
-./deploy.sh --tag 1.1.0
-```
+一键安装过的那条命令也可以直接重跑。
 
 脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.0`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
@@ -217,32 +198,31 @@ cd /vol2/1000/dockers/NASphere
 config.json
 auth.json
 uploads/
+.env
 ```
 
-安装目录里那份 `.env` 也只被脚本读取、不会被改写。
-
 因此正常升级不会影响已经设置好的主页，登录账号密码也不变。
-
-`.env` 同样会被保留，所以升级后登录账号密码不变。
 
 ---
 
 # 🔐 首次登录
 
-用 `deploy.sh` 一键安装、且没有预先指定密码时，脚本会随机生成初始密码，并在这次输出里打印：
+用 `deploy.sh` 一键安装、且没有预先指定密码时，初始密码随机生成：
 
 ```text
 用户名：admin
 密码　：<本次随机生成的 16 位密码>
 ```
 
-这个密码不是所有人都一样的默认值。它同时留档在：
+这个密码只在安装输出里打印一次，留档位置：
 
 ```text
-/vol2/1000/dockers/NASphere/.env
+项目目录/.env
 ```
 
-这是公开仓库上人人可查的默认密码，而且默认部署还会把 `docker.sock` 挂进容器（页面账号等于能启停宿主机上的容器）。**第一次登录后请立即进入：**
+权限 `600`，忘记密码时在这里查。
+
+**第一次登录后请立即进入：**
 
 ```text
 设置 → 安全
@@ -250,14 +230,12 @@ uploads/
 
 修改账号和密码。改过一次之后 `data/auth.json` 就是唯一的凭据来源，之后重装、升级都不会把它换回去。
 
-服务端另有两个环境变量 `NAV_USER` / `NAV_PASSWORD`，只在 `data/auth.json` 不存在时用于初始化；`deploy.sh` 不注入它们，需要时用 `docker run -e` 或 compose 的 `environment` 自己带上。
+也可以在第一次部署之前通过 `.env` 指定，这样首装就不再生成随机密码：
 
 ```env
 NAV_USER=admin
 NAV_PASSWORD=你的密码
 ```
-
-这样首装就不会再生成随机密码，直接用你写的这个。
 
 注意：
 
@@ -265,7 +243,7 @@ NAV_PASSWORD=你的密码
 
 如果 `data/auth.json` 已经存在，修改环境变量不会直接覆盖现有账号密码。
 
-> 只有绕过 `deploy.sh`、直接 `docker compose up -d` 且没有 `.env` 时，密码才会落到镜像内置的 `admin123`。手动 Compose / Docker Run 之前请先写好 `.env`。
+> 直接 `docker compose up -d` 且没有 `.env` 时用的是镜像内置默认密码，手动部署前先写好 `.env`。
 
 ---
 
@@ -340,7 +318,7 @@ docker run -d \
   -p 18086:8080 \
   -e NAV_USER='admin' \
   -e NAV_PASSWORD='你自己的密码' \
-  -v /vol2/1000/dockers/NASphere/data:/data \
+  -v "$(pwd)/data:/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/peekaboo789/nasphere:1.0.0
 ```
@@ -402,13 +380,11 @@ docker compose up -d
 健康检查
 ```
 
-NAS 连 GitHub 也上不了、但你想让它自己构建镜像时，可以先在别的机器上把源码打包传过去：
+NAS 连 GitHub 也上不了时，改用本地源码包安装：
 
 ```bash
 ./deploy.sh --source /volume1/docker/NASphere-src.tar.gz
 ```
-
-这样源码由本地压缩包提供，跳过 GitHub 下载，其余流程不变。
 
 ---
 
@@ -1187,7 +1163,7 @@ dat/
 ./deploy.sh --root /volume1/docker/NASphere
 ```
 
-一键安装时指定源码装到哪里（管道执行要写成 `bash -s -- --root ...`）。
+一键安装时指定源码装到哪里。
 
 ```bash
 ./deploy.sh --data-dir /volume1/docker/nasphere/data
@@ -1205,7 +1181,7 @@ dat/
 ./deploy.sh --dry-run
 ```
 
-只显示操作，不执行、不落盘。一键安装模式下也不会真的去下载源码。
+只显示操作，不执行。
 
 ```bash
 ./deploy.sh --tar dist/nasphere-1.2.0-linux-arm64.tar.gz

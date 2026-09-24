@@ -180,12 +180,6 @@ NASphere 一键安装 / 部署工具
   数据：
     ./data
 
-  时区：
-    Asia/Shanghai
-
-  初始账号 / 密码：
-    admin / admin123（镜像内置的默认值，装完立刻登录去「设置 → 安全」改掉）
-
   初始账号：
     admin
 
