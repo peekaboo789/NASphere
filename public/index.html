@@ -1,1 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="same-origin">
+<meta name="color-scheme" content="light dark">
+<meta name="author" content="peekaboo789">
+<meta name="application-name" content="NASphere">
+<title>NASphere</title>
+<link rel="icon" type="image/png" href="/img/favicon.png">
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+<div class="bg" id="bgLayer" aria-hidden="true"></div>
+<div class="bg-veil" id="bgVeil" aria-hidden="true"></div>
 
+<div class="boot" id="bootScreen">正在连接 NAS…</div>
+
+<div class="app" id="app" hidden>
+  <header class="topbar">
+    <nav class="topbar-actions">
+      <button class="chip" type="button" id="weatherChip" hidden></button>
+    </nav>
+  </header>
+
+  <!-- 右上角低调工具区：内外网切换 + 设置 -->
+  <div class="corner-tools">
+    <button class="corner-btn" type="button" id="netBtn"></button>
+    <button class="corner-btn" type="button" id="settingsBtn" title="设置（快捷键 ,）" aria-label="设置">⚙️</button>
+  </div>
+
+  <section class="hero" id="hero">
+    <div class="clock" id="clockBox">
+      <div class="clock-time" id="clockTime">--:--</div>
+      <div class="clock-meta"><span id="clockDate"></span><span class="clock-sep">·</span><span id="greeting"></span></div>
+    </div>
+
+    <form class="search" id="searchForm" autocomplete="off">
+      <div class="engine-picker" id="enginePicker">
+        <button class="engine-btn" type="button" id="engineBtn" aria-haspopup="true" aria-expanded="false">
+          <span class="engine-ico" id="engineIcon">🔍</span>
+          <span class="engine-reveal"><span id="engineName">百度</span><span class="caret">▾</span></span>
+        </button>
+        <div class="menu" id="engineMenu" hidden></div>
+      </div>
+      <input class="search-input" id="searchInput" spellcheck="false" aria-label="搜索或输入网址">
+      <button class="search-go" type="submit" title="搜索" aria-label="搜索">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.6" cy="10.6" r="6.6"></circle><path d="M15.5 15.5 20.5 20.5"></path></svg>
+      </button>
+    </form>
+  </section>
+
+  <section class="panels" id="panels">
+    <article class="card panel" id="notesPanel">
+      <div class="card-head">
+        <h2>便签</h2>
+        <span class="card-hint" id="notesHint"></span>
+      </div>
+      <textarea class="notes" id="notesArea" placeholder="随手记点什么…"></textarea>
+    </article>
+
+    <article class="card panel" id="todosPanel">
+      <div class="card-head">
+        <h2>待办</h2>
+        <span class="card-hint" id="todoProgress"></span>
+      </div>
+      <form class="todo-add" id="todoForm">
+        <input id="todoInput" placeholder="添加待办" maxlength="200">
+        <button type="submit" title="添加">＋</button>
+      </form>
+      <ul class="todo-list" id="todoList"></ul>
+    </article>
+  </section>
+
+  <!-- 容器组件的摆放区：不再有「应用矩阵」那个窗口，每张组件各带 x/y 直接摆在页面上，长按拖到任意位置 -->
+  <div class="dk-layer" id="dkLayer" hidden></div>
+
+  <main class="groups" id="groups"></main>
+
+  <div class="editbar" id="editBar" hidden>
+    <button class="btn ghost add-group-btn" type="button" id="addGroupBtn">＋ 新建分组</button>
+  </div>
+
+  <footer class="foot">
+    <span id="saveState"></span>
+    <span class="foot-credit">© 2026 peekaboo789 · NASphere</span>
+  </footer>
+</div>
+
+<nav class="side-nav" id="sideNav" aria-label="分组导航" hidden></nav>
+
+<div class="scroll-zone" id="scrollZone" aria-hidden="true" hidden>
+  <div class="scroll-rail"><span class="scroll-thumb" id="scrollThumb"></span></div>
+</div>
+
+<div class="modal login" id="loginModal" hidden>
+  <div class="login-bg" id="loginBg" aria-hidden="true"></div>
+  <div class="login-veil" id="loginVeil" aria-hidden="true"></div>
+  <div class="login-inner">
+    <div class="login-brand">
+      <!-- 品牌标：定稿图（青→蓝→紫渐变的 NS 双环，左环读 N、右环读 S，白底已抠成透明），标签页那枚是同一图形缩到 64px 的 /img/favicon.png -->
+      <img class="login-mark" src="/img/logo.png" alt="" width="480" height="323" aria-hidden="true">
+      <h2 class="login-logo" id="loginTitle">NASphere</h2>
+    </div>
+    <form class="login-card" id="loginForm">
+      <input class="field" type="text" id="loginAccount" name="account" placeholder="账号" maxlength="32" autocomplete="username" spellcheck="false" required>
+      <input class="field" type="password" id="loginPassword" name="password" placeholder="密码" autocomplete="current-password" required>
+      <button class="btn primary" type="submit" id="loginSubmit">登录</button>
+      <p class="error" id="loginError" hidden></p>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="settingsModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>设置</h2>
+      <button class="icon-btn" type="button" data-close title="关闭">✕</button>
+    </div>
+    <div class="tabs" role="tablist">
+      <button class="tab active" type="button" data-tab="look">外观壁纸</button>
+      <button class="tab" type="button" data-tab="apps">编辑应用</button>
+      <button class="tab" type="button" data-tab="docker">应用矩阵</button>
+      <button class="tab" type="button" data-tab="search">搜索引擎</button>
+      <button class="tab" type="button" data-tab="widget">小组件</button>
+      <button class="tab" type="button" data-tab="data">数据</button>
+      <button class="tab" type="button" data-tab="safe">安全</button>
+    </div>
+
+    <div class="tab-body" data-body="look">
+      <label class="row"><span>页面标题（登录页 logo 与浏览器标签页用它，主页不显示）</span><input class="field" id="setTitle" maxlength="40"></label>
+      <div class="row"><span>主题</span>
+        <div class="seg" id="themeSeg">
+          <button type="button" data-v="auto">跟随系统</button>
+          <button type="button" data-v="light">浅色</button>
+          <button type="button" data-v="dark">深色</button>
+        </div>
+      </div>
+      <label class="row"><span>强调色</span><input type="color" class="field color" id="accentInput"></label>
+      <div class="row"><span>图标大小</span>
+        <div class="seg" id="iconSizeSeg">
+          <button type="button" data-v="small">小</button>
+          <button type="button" data-v="medium">中</button>
+          <button type="button" data-v="large">大</button>
+        </div>
+      </div>
+      <div class="row"><span>图标位置</span>
+        <div class="seg" id="tileLayoutSeg">
+          <button type="button" data-v="top">图在上</button>
+          <button type="button" data-v="left">图在左</button>
+        </div>
+      </div>
+      <label class="row"><span>字体大小 <b id="fontVal">12.5</b>px</span><input type="range" min="10" max="20" step="0.5" id="fontRange"></label>
+      <label class="row"><span>卡片行距 <b id="gapVal">12</b>px</span><input type="range" min="2" max="40" step="1" id="gapRange"></label>
+      <div class="row col">
+        <span>壁纸来源</span>
+        <div class="seg" id="wpSeg">
+          <button type="button" data-v="gradient">内置渐变</button>
+          <button type="button" data-v="url">图片链接</button>
+          <button type="button" data-v="upload">上传到 NAS</button>
+          <button type="button" data-v="bing">必应每日</button>
+          <button type="button" data-v="none">无</button>
+        </div>
+      </div>
+      <div class="wp-pane" id="wpGradient">
+        <div class="swatches" id="gradientSwatches"></div>
+      </div>
+      <div class="wp-pane" id="wpUrl">
+        <label class="row"><span>图片地址</span><input class="field" id="wpUrlInput" placeholder="https://... 或 /media/xxx.jpg"></label>
+      </div>
+      <div class="wp-pane" id="wpUpload">
+        <div class="row col"><span>选择本地图片（保存到 NAS，所有设备共用）</span>
+          <input type="file" id="wpFile" accept="image/png,image/jpeg,image/webp,image/gif,image/avif">
+        </div>
+        <p class="muted" id="wpUploadState"></p>
+      </div>
+      <div class="wp-pane" id="wpBing">
+        <p class="muted">每天自动拉取必应当日壁纸，由 NAS 端缓存，无需浏览器可访问外网。</p>
+      </div>
+      <div class="row"><span>壁纸填充</span>
+        <div class="seg" id="wpFitSeg">
+          <button type="button" data-v="cover">裁剪铺满</button>
+          <button type="button" data-v="stretch">拉伸铺满</button>
+          <button type="button" data-v="contain">完整显示</button>
+        </div>
+      </div>
+      <label class="row"><span>壁纸模糊 <b id="blurVal">0</b>px</span><input type="range" min="0" max="30" step="1" id="blurRange"></label>
+      <label class="row"><span>壁纸压暗 <b id="dimVal">32</b>%</span><input type="range" min="0" max="90" step="2" id="dimRange"></label>
+    </div>
+
+    <div class="tab-body" data-body="apps" hidden>
+      <p class="muted">这一栏只管<b>网址应用</b>：新建、改名称网址图标、选所属分组（挪组＝从原分组摘掉、追加到目标分组末尾）。容器组件在旁边的「应用矩阵」一栏单独管，分组本身在「数据」栏。</p>
+      <button class="btn primary" type="button" id="appNewBtn">＋ 新建应用</button>
+      <ul class="app-list" id="appList"></ul>
+    </div>
+
+    <div class="tab-body" data-body="docker" hidden>
+      <p class="muted">容器组件不再有窗口，每张各带自己的坐标<b>直接摆在主页上</b>：先整列摊开这台 NAS 上的<b>所有容器</b>，点一个就往页面上加一张（已经挂过的标着「已在页面上」，点它直接编辑那张）。<b>挪位置在主页上长按那张组件约半秒再拖</b>，摆到任意坐标、互相叠放都行，刚拖过的盖在上面；每行里的两个滑块调这一张自己的长宽。实时数据每 3 秒刷一次（切到后台的标签页不刷），<b>启动 / 停止 / 重启在组件上右键</b>。<b>能查看和启停的容器只有这一栏点过名的</b>，删除、重建、进容器执行命令都没有开放。</p>
+      <h3 class="sub">容器一览</h3>
+      <p class="muted" id="dkCabinetHint">正在读取这台 NAS 上的容器…</p>
+      <div class="docker-list" id="dkCabinet"></div>
+      <h3 class="sub">主页上的容器组件</h3>
+      <ul class="app-list" id="dkTileList"></ul>
+    </div>
+
+    <div class="tab-body" data-body="search" hidden>
+      <p class="muted">用 <code>{query}</code> 作为关键词占位符，例如 <code>https://www.baidu.com/s?wd={query}</code></p>
+      <ul class="engine-list" id="engineList"></ul>
+      <form class="engine-form" id="engineForm">
+        <input class="field" id="engName" placeholder="名称，如 知乎" maxlength="60" required>
+        <input class="field wide" id="engUrl" placeholder="https://www.zhihu.com/search?q={query}" required>
+        <button class="btn primary" type="submit">添加引擎</button>
+      </form>
+      <div class="row"><span>默认引擎</span><select class="field" id="defaultEngine"></select></div>
+      <label class="row"><span>搜索框记住上次使用的引擎</span><input type="checkbox" id="rememberEngine"></label>
+    </div>
+
+    <div class="tab-body" data-body="widget" hidden>
+      <label class="row"><span>显示时钟与问候</span><input type="checkbox" id="showClock"></label>
+      <label class="row"><span>秒针</span><input type="checkbox" id="showSeconds"></label>
+      <label class="row"><span>24 小时制</span><input type="checkbox" id="clock24"></label>
+      <label class="row"><span>显示便签</span><input type="checkbox" id="showNotes"></label>
+      <label class="row"><span>显示待办</span><input type="checkbox" id="showTodos"></label>
+      <div class="row col">
+        <span>天气城市</span>
+        <div class="city-picker">
+          <input class="field" id="cityInput" placeholder="输入城市名回车搜索，如 杭州">
+          <ul class="menu inline" id="cityResults" hidden></ul>
+        </div>
+      </div>
+      <label class="row"><span>显示天气</span><input type="checkbox" id="showWeather"></label>
+      <label class="row"><span>默认图标来源</span><select class="field" id="iconDefault">
+        <option value="emoji">Emoji</option>
+        <option value="auto">站点 favicon</option>
+        <option value="letter">首字母</option>
+      </select></label>
+      <label class="row"><span>favicon 服务模板</span><input class="field" id="iconTemplate" placeholder="https://icon.horse/icon/{domain}"></label>
+    </div>
+
+    <div class="tab-body" data-body="data" hidden>
+      <p class="muted">全部数据存放在 NAS 的 <code>./data/config.json</code>，备份该文件即可迁移。分组在这里新建和挪顺序，<b>不用先开编辑模式</b>。</p>
+      <label class="row"><span>编辑模式（卡片可增删、拖拽排序，快捷键 E）</span><input type="checkbox" id="editModeToggle"></label>
+      <div class="btn-row">
+        <button class="btn" type="button" id="exportBtn">导出配置 JSON</button>
+        <label class="btn" for="importFile">导入配置 JSON</label>
+        <input type="file" id="importFile" accept="application/json,.json" hidden>
+        <button class="btn" type="button" id="resetBtn">清空为初始配置</button>
+      </div>
+      <h3 class="sub">分组概览</h3>
+      <button class="btn primary" type="button" id="groupNewBtn">＋ 新建分组</button>
+      <ul class="group-list" id="groupList"></ul>
+    </div>
+
+    <div class="tab-body" data-body="safe" hidden>
+      <p class="muted" id="safeNotice"></p>
+      <form id="credentialsForm" class="pw-form">
+        <label class="row col"><span>登录账号</span><input type="text" class="field" id="accountInput" maxlength="32" autocomplete="username" spellcheck="false"></label>
+        <label class="row col"><span>当前密码</span><input type="password" class="field" id="pwCurrent" autocomplete="current-password"></label>
+        <label class="row col"><span>新密码（至少 6 位，留空表示不改）</span><input type="password" class="field" id="pwNew" autocomplete="new-password"></label>
+        <label class="row col"><span>重复新密码</span><input type="password" class="field" id="pwNew2" autocomplete="new-password"></label>
+        <div class="modal-foot"><button class="btn primary" type="submit">保存</button></div>
+      </form>
+      <h3 class="sub">会话</h3>
+      <button class="btn" type="button" id="logoutBtn2">退出登录</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="linkModal" hidden>
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="linkModalTitle">新建应用</h2>
+      <button class="icon-btn" type="button" data-close title="关闭">✕</button>
+    </div>
+    <form id="linkForm">
+      <label class="row col"><span>名称</span><input class="field" id="lkTitle" maxlength="200" required></label>
+      <label class="row col" id="lkGroupRow"><span>所属分组</span><select class="field" id="lkGroup"></select></label>
+      <div class="row col" id="lkDockerRow" hidden>
+        <span>绑定的容器</span>
+        <div class="docker-bind"><code id="lkDockerName"></code></div>
+        <p class="muted" id="lkDockerCabinetHint">正在读取这台 NAS 上的容器…</p>
+        <!-- 整列摊开这台 NAS 上的所有容器，点一个就换绑；不再走弹层和下拉 -->
+        <div class="docker-list compact" id="lkDockerList"></div>
+      </div>
+      <label class="row col"><span>外网网址</span><input class="field" id="lkUrl" placeholder="https://nas.example.com" maxlength="2000"></label>
+      <label class="row col"><span>内网网址（可选）</span><input class="field" id="lkUrlLan" placeholder="http://192.168.1.100:5000" maxlength="2000"></label>
+      <p class="muted" id="lkDockerHint" hidden>容器组件按容器名取实时数据，启动 / 停止 / 重启在主页那张组件的右键菜单里；网址只是顺带一个入口，可留空。</p>
+      <label class="row col"><span>备注（可选，卡片上不占行，鼠标悬停时在提示里显示）</span><input class="field" id="lkDesc" maxlength="200"></label>
+      <div class="row col"><span>图标</span>
+        <div class="seg" id="iconKindSeg">
+          <button type="button" data-v="emoji">Emoji</button>
+          <button type="button" data-v="auto">站点图标</button>
+          <button type="button" data-v="image">图片链接</button>
+          <button type="button" data-v="letter">首字母</button>
+        </div>
+      </div>
+      <div class="icon-pane" id="ipEmoji"><input class="field" id="lkEmoji" placeholder="🎬" maxlength="4"></div>
+      <div class="icon-pane" id="ipImage"><input class="field" id="lkImage" placeholder="https://... 或 /media/xxx.png"></div>
+      <div class="icon-pane" id="ipAuto"><p class="muted">按「设置 → 小组件」里的 favicon 模板自动取站点图标，取不到时回退首字母。</p></div>
+      <div class="icon-pane" id="ipUpload">
+        <div class="upload-drop" id="iconDrop">把图片拖到这里，或选择本地文件上传（图片会存到 NAS，所有设备共用）<input type="file" id="lkFile" accept="image/*"></div>
+      </div>
+      <div class="icon-preview"><span id="lkPreview" class="tile-icon"></span><span class="muted">预览</span></div>
+      <div class="modal-foot">
+        <button class="btn danger" type="button" id="lkDelete" hidden>删除</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-close>取消</button>
+        <button class="btn primary" type="submit">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="groupModal" hidden>
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="groupModalTitle">新建分组</h2>
+      <button class="icon-btn" type="button" data-close title="关闭">✕</button>
+    </div>
+    <form id="groupForm">
+      <label class="row col"><span>分组名称（卡片头直接显示，左侧导航悬停时浮出）</span><input class="field" id="gpName" maxlength="60" required></label>
+      <div class="row col"><span>分组图标（只显示在最左侧导航那一列）</span>
+        <div class="seg" id="gpIconSeg">
+          <button type="button" data-v="emoji">Emoji</button>
+          <button type="button" data-v="image">图片链接</button>
+          <button type="button" data-v="letter">首字母</button>
+        </div>
+      </div>
+      <div class="icon-pane" id="gpipEmoji"><input class="field" id="gpEmoji" placeholder="🗄️" maxlength="4"></div>
+      <div class="icon-pane" id="gpipImage"><input class="field" id="gpImage" placeholder="https://... 或 /media/xxx.png"></div>
+      <div class="icon-pane" id="gpipUpload">
+        <div class="upload-drop" id="gpIconDrop">把图片拖到这里，或选择本地文件上传（图片会存到 NAS，所有设备共用）<input type="file" id="gpFile" accept="image/*"></div>
+      </div>
+      <div class="icon-preview"><span id="gpPreview" class="tile-icon"></span><span class="muted">预览</span></div>
+      <div class="row col"><span>网址取法</span>
+        <div class="seg" id="gpNetSeg">
+          <button type="button" data-v="">跟随全局开关</button>
+          <button type="button" data-v="lan">只用内网网址</button>
+          <button type="button" data-v="wan">只用外网网址</button>
+        </div>
+      </div>
+      <p class="muted" id="gpNetHint"></p>
+      <div class="modal-foot">
+        <button class="btn danger" type="button" id="gpDelete" hidden>删除分组</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-close>取消</button>
+        <button class="btn primary" type="submit">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<div class="ctx-menu" id="ctxMenu" role="menu" aria-label="链接操作" hidden></div>
+
+<script src="/js/store.js"></script>
+<script src="/js/widgets.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
