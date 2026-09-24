@@ -57,10 +57,23 @@ const fmtRate = (n) => (Number.isFinite(n) && n >= 0 ? fmtBytes(n) + '/s' : '—
 const groupMode = (group, globalMode) =>
   group && (group.netMode === 'lan' || group.netMode === 'wan') ? group.netMode : globalMode;
 
+// Safari 和部分安卓浏览器把 .ico 报成空 type，只看 file.type 会漏掉合法的图标文件
+const imageMimeOf = (file) => {
+  const type = String((file && file.type) || '');
+  if (type.startsWith('image/')) return type;
+  return /\.ico$/i.test(String((file && file.name) || '')) ? 'image/x-icon' : type;
+};
+
+const isImageFile = (file) => imageMimeOf(file).startsWith('image/');
+
 const fileToDataUrl = (file) =>
   new Promise((resolve, reject) => {
     const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
+    r.onload = () => {
+      const mime = imageMimeOf(file);
+      const result = String(r.result);
+      resolve(mime ? result.replace(/^data:[^;]*;/, `data:${mime};`) : result);
+    };
     r.onerror = () => reject(new Error('读取文件失败'));
     r.readAsDataURL(file);
   });

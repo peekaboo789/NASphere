@@ -1094,7 +1094,7 @@ const App = {
       a.addEventListener('dragend', () => a.classList.remove('dragging'));
       a.addEventListener('drop', (e) => {
         const file = e.dataTransfer?.files?.[0];
-        if (!file || !file.type.startsWith('image/')) return;
+        if (!isImageFile(file)) return;
         e.preventDefault();
         e.stopPropagation();
         this.setIconFromUpload(file, link, groupId);
@@ -1907,7 +1907,7 @@ const App = {
   },
 
   async setIconFromUpload(file, link, groupId, intoDraft) {
-    if (!file.type.startsWith('image/')) return this.toast('只能上传图片文件', 2500, true);
+    if (!isImageFile(file)) return this.toast('只能上传图片文件', 2500, true);
     try {
       const url = await Api.uploadImage(await fileToDataUrl(file));
       if (intoDraft) {
@@ -2025,7 +2025,7 @@ const App = {
   },
 
   async setGroupIconFromUpload(file) {
-    if (!file.type.startsWith('image/')) return this.toast('只能上传图片文件', 2500, true);
+    if (!isImageFile(file)) return this.toast('只能上传图片文件', 2500, true);
     try {
       const url = await Api.uploadImage(await fileToDataUrl(file));
       this.groupDraft.icon = url;
