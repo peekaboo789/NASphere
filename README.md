@@ -113,7 +113,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.0.0
+镜像：ghcr.io/peekaboo789/nasphere:1.0.1
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -184,7 +184,7 @@ chmod +x deploy.sh
 ./deploy.sh --tag 1.1.0
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.0`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.1`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -245,7 +245,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.0`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.1`，拉下来直接起容器。
 
 默认访问：
 
@@ -278,8 +278,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.0.0-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.0 ghcr.io/peekaboo789/nasphere:1.0.0
+docker load -i nasphere-1.0.1-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.1 ghcr.io/peekaboo789/nasphere:1.0.1
 docker compose up -d
 ```
 
@@ -291,10 +291,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.0 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.1 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.0.0
+docker pull ghcr.io/peekaboo789/nasphere:1.0.1
 ```
 
 然后：
@@ -308,7 +308,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.0
+  ghcr.io/peekaboo789/nasphere:1.0.1
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -351,7 +351,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.0.0-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.0.1-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -1124,7 +1124,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.0.0`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.0.1`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1372,6 +1372,39 @@ NASphere 当前是：
 如果多个用户同时修改配置，后保存的修改可能覆盖先保存的修改。
 
 家庭 NAS 场景下一般只建议少量可信用户使用。
+
+---
+
+# 🆕 更新日志
+
+## v1.0.1
+
+修复：应用程序只填内网或者外网网址时，内外网都使用这个网址访问。
+
+旧版要一个应用把两条网址都填全，只填一条的卡片切到另一种模式就变灰、点了不跳转。
+
+现在只填一条就够：
+
+```text
+内网工具　→ 只填内网网址
+外部站点　→ 只填外网网址
+```
+
+两种模式下都走这一条，卡片照常新窗口打开。
+
+两条网址都填的应用仍然严格分开，切换模式各走各的；分组固定的 `netMode` 也没有变。规则详见「🌐 内网 / 外网」。
+
+## v1.0.0
+
+首个公开版本：
+
+* 一条命令安装：自动检测架构、生成 compose、拉取 GHCR 镜像、启动并探活
+* 零外部依赖：不需要 `npm install`，不需要前端构建
+* 自定义图标与壁纸、多引擎搜索、分组卡片长按拖拽
+* Docker 容器组件：状态查看与启动 / 停止 / 重启
+* 天气、时钟、便签与待办
+* 账号密码门禁，配置与图片全部留在 NAS 本地
+* 手机浏览器适配
 
 ---
 

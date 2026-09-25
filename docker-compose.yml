@@ -16,8 +16,8 @@
 #
 # NAS 拉不动 ghcr 的话，用离线镜像包 docker load 之后再补一个同名的标签：
 #
-#   docker load -i nasphere-1.0.0-linux-amd64.tar.gz
-#   docker tag local/nasphere:1.0.0 ghcr.io/peekaboo789/nasphere:1.0.0
+#   docker load -i nasphere-1.0.1-linux-amd64.tar.gz
+#   docker tag local/nasphere:1.0.1 ghcr.io/peekaboo789/nasphere:1.0.1
 #
 # 默认访问：
 #
@@ -52,7 +52,7 @@ services:
     # 目前是 linux/amd64 单架构；ARM 机型（群晖多数是 arm64/v8）
     # 直接用这条会报 no matching manifest，改走离线包那条。
     #
-    image: ghcr.io/peekaboo789/nasphere:1.0.0
+    image: ghcr.io/peekaboo789/nasphere:1.0.1
 
     # ========================================================
     # 自动重启
