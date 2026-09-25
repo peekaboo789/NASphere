@@ -33,8 +33,12 @@ const domainOf = (url) => {
   }
 };
 
-// 严格按当前网络模式取网址：内网只认内网网址，外网只认外网网址，没填就没有链接
-const linkHref = (link, mode) => String((mode === 'lan' ? link.urlLan : link.url) || '');
+// 两条都填了就按当前模式各取一边；只填了一条时两种模式都用这一条，卡片不再点不动
+const linkHref = (link, mode) => {
+  const lan = String((link && link.urlLan) || '');
+  const wan = String((link && link.url) || '');
+  return mode === 'lan' ? lan || wan : wan || lan;
+};
 
 // 带 container（Docker 容器名）的卡片是容器磁贴，不是普通网址卡片
 const isContainer = (link) => Boolean(link && link.container);
