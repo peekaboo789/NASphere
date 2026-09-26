@@ -123,7 +123,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.0.3
+镜像：ghcr.io/peekaboo789/nasphere:1.0.4
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -194,7 +194,7 @@ chmod +x deploy.sh
 ./deploy.sh --tag 1.1.0
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.3`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.4`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -255,7 +255,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.3`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.4`，拉下来直接起容器。
 
 默认访问：
 
@@ -288,8 +288,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.0.3-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.3 ghcr.io/peekaboo789/nasphere:1.0.3
+docker load -i nasphere-1.0.4-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.4 ghcr.io/peekaboo789/nasphere:1.0.4
 docker compose up -d
 ```
 
@@ -301,10 +301,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.3 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.4 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.0.3
+docker pull ghcr.io/peekaboo789/nasphere:1.0.4
 ```
 
 然后：
@@ -318,7 +318,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.3
+  ghcr.io/peekaboo789/nasphere:1.0.4
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -367,7 +367,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.0.3-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.0.4-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -643,15 +643,18 @@ NAS 总览
 里点一下就往主页上加一张，摆放、叠放、宽高和容器组件完全是同一套操作。「自定义读数」能加好几张，
 勾哪几行就画哪几行，新加的默认给内存 / CPU / 网络三行。
 
+名字和图标随便改，读数本身改不了：「应用矩阵」那一栏每张读数卡右边的 ✎ 打开就是这两件事。图标留空
+就用这张卡自带的那枚描边图形，也可以换成 Emoji 或者上传一张图片。
+
 显示：
 
 ```text
 内存：已用 / 总量 / 百分比
 CPU：占用百分比 + 核心数 + 1 分钟负载
 网络：下行 / 上行速率
-GPU：占用百分比（驱动没写这一项就直说读不到）
+GPU：占用百分比（读不到就在同一行写明为什么读不到）
 存储空间：已用 / 总量 / 百分比
-物理盘：型号 + 容量
+物理盘：型号 + 容量（一块都没认出来时，写的是卡在哪一步）
 ```
 
 默认每 5 秒刷新一次，切到后台的标签页不刷。CPU 占用和网络速率都是拿累计计数作差算出来的，
@@ -673,13 +676,25 @@ GPU：占用百分比（驱动没写这一项就直说读不到）
 /proc/stat      → CPU 的累计 ticks
 /proc/loadavg   → 1 / 5 / 15 分钟负载
 /proc/net/dev   → 每块网卡的收发字节
-/sys/class/drm  → 显卡占用那一个百分比
+/sys/class/drm  → 显卡占用：先看 gpu_busy_percent，再看每个引擎的 busy_percent（i915 只写后者）
 /sys/block      → 盘的设备名、型号、总容量
 statfs()        → 某个目录所在文件系统的块数
 ```
 
 回环、`docker0` 和一对端的 `veth` 不计入网络流量，`loop` / `ram` / `zram` / `md` 这类包出来的设备也不报成硬盘。
+认盘靠的是这一份排除名单，不是猜盘名前缀：`/sys/block` 下面每一项都是符号链接，各家机器的盘名也差得远。
 这些来源给的都是计数器，接口返回的字段全是数字与型号，页面不会列出一个文件名，也没有挂载点路径。
+
+## 卡片上那几句「读不到」是什么意思
+
+```text
+刚开始采样 — CPU 占用与网络速率都是作差算的，第二轮起才有数字
+读不到 GPU 占用（驱动 … · 频率 …） — 这块卡的驱动不写百分比，括号里给的是驱动名和当前 / 峰值频率
+这台机器上没有 /sys/block — 容器里看不见宿主机的 sysfs
+/sys/block 里没有可用的盘 — sysfs 看得见，排除掉虚拟设备之后没剩下一块报容量的盘
+查不到这块硬盘 — 配置里点名的那块盘不在这份名单里，换盘、拔盘都会这样
+查不到这个卷（没挂进容器就读不到） — deploy.sh 生成的只读挂载里没有这一卷
+```
 
 ## 卷怎么列出来
 
@@ -974,6 +989,8 @@ http://
       },
       {
         "title": "内存",
+        "icon": "🧮",
+        "iconKind": "emoji",
         "res": "mem",
         "w": 250,
         "h": 118,
@@ -1303,7 +1320,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.0.3`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.0.4`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1556,6 +1573,19 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.0.4
+
+修复：真机上「硬盘读不到」和「核显读不到」这两件事。
+
+```text
+硬盘　　→ /sys/block 下面每一项都是符号链接，之前按目录类型去认，一块盘都剩不下；现在只认名字，认盘改成排除名单（loop / ram / zram / sr / md / dm- 这些不算盘），各家那些对不上的盘名（sdX、nvmeXnY、mmcblkX、群晖的 sata1）都进得来
+核显　　→ 以前只读 amdgpu 才写的那一个百分比；现在先看 gpu_busy_percent，再退到每个引擎的 busy_percent 取最大值（i915 只写这一份），两处都没有才算读不到
+```
+
+读数卡上的「读不到」现在都带原因，写在同一行：括号里给驱动名和当前 / 峰值频率，硬盘那一行给的是卡在哪一步（看不见 sysfs、还是排除之后没剩盘）。详见「📊 NAS 资源组件」里那几句「读不到」的对照表。
+
+新增：读数卡的名字和图标可以改了，读数本身照旧不能改。「应用矩阵」那一栏每张读数卡右边的 ✎ 打开只有名称和图标两件事，图标留空就用这张卡自带的那枚描边图形，也能换成 Emoji 或上传图片。
 
 ## v1.0.3
 

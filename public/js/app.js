@@ -232,13 +232,13 @@ function resRowOf(key, d, compact) {
   }
   if (key === 'gpu') {
     const g = d.gpu || {};
-    // 核显那项只有部分驱动写，读不到就直说，不拿 CPU 的数字冒充
-    if (!resHas(g.used)) return [{ k: 'GPU', note: '读不到 GPU 占用（这台机器的驱动没写这一项）' }];
+    // 服务端会带回「为什么没有」——驱动名与频率这类线索写在行上，比一句读不到有用
+    if (!resHas(g.used)) return [{ k: 'GPU', note: '读不到 GPU 占用' + (g.note ? '（' + g.note + '）' : '') }];
     return [{ k: 'GPU', pct: g.used, note: compact ? '' : '显卡占用' }];
   }
   if (key === 'vols' || key === 'disks') {
     const list = (key === 'vols' ? d.volumes : d.disks) || [];
-    if (!list.length) return [{ k: key === 'vols' ? '存储卷' : '硬盘', note: '读不到' }];
+    if (!list.length) return [{ k: key === 'vols' ? '存储卷' : '硬盘', note: (key === 'disks' && d.diskNote ? d.diskNote : '读不到') }];
     return key === 'vols'
       ? list.map((v) => ({ k: v.name, ...usage(v.total, v.used) }))
       : list.map((x) => ({ k: x.model || x.name, note: fmtBytes(x.size) }));
@@ -250,7 +250,7 @@ function resRowOf(key, d, compact) {
   }
   if (key.startsWith('disk:')) {
     const x = ((d.disks || []).find((y) => y.name === id)) || null;
-    return [x ? { k: x.model || x.name, note: fmtBytes(x.size) } : { k: id || '没选硬盘', note: '查不到这块硬盘' }];
+    return [x ? { k: x.model || x.name, note: fmtBytes(x.size) } : { k: id || '没选硬盘', note: '查不到这块硬盘' + (d.diskNote ? '（' + d.diskNote + '）' : '') }];
   }
   return [{ k: key, note: '不认识的行' }];
 }
@@ -650,10 +650,16 @@ const App = {
   /* ---------- 资源组件：图标 + 名称 + 几行「用量条 + 数字」，数字每 5 秒换一轮 ---------- */
 
   resTileNode(item) {
+    // 改过图标就用自己那一个（Emoji 或上传的图片），没改过是内置那四枚白色描边 SVG
+    const icon = item.icon ? this.iconNode(item, 'tile-icon dk-res-icon') : this.resBuiltInIcon(item);
+    return this.dkTileShell(item, [icon, this.dkTitleNode(item), this.resBodyNode(item)]);
+  },
+
+  resBuiltInIcon(item) {
     const icon = document.createElement('span');
     icon.className = 'tile-icon dk-res-icon';
     icon.innerHTML = RES_ICON[item.res] || RES_ICON.overview;
-    return this.dkTileShell(item, [icon, this.dkTitleNode(item), this.resBodyNode(item)]);
+    return icon;
   },
 
   resBodyNode(item) {
@@ -1965,31 +1971,41 @@ const App = {
 
   linkDraft: null,
 
-  // dockerMode 由入口决定：「编辑应用」开出来的是网址应用，「应用矩阵」栏开出来的是容器组件
-  openLinkModal(link, groupId, dockerMode = false) {
-    const kind = link ? link.iconKind : Prefs.get('defaultIconKind', 'emoji');
+  // 第三参数决定这个弹层是哪一路：false「编辑应用」、true「容器组件」、'res'「读数卡（只改名称与图标）」
+  openLinkModal(link, groupId, mode = false) {
+    const dockerMode = mode === true;
+    const resMode = mode === 'res';
+    const tileMode = dockerMode || resMode;
+    let kind = link ? link.iconKind : Prefs.get('defaultIconKind', 'emoji');
+    // 读数卡没有网址可猜，站点图标与首字母那两档对它没意义；出厂写的 letter 一律当「用内置图标」
+    if (resMode && kind !== 'emoji' && kind !== 'image') kind = 'emoji';
     const group = groupId || (Store.cfg.groups[0] && Store.cfg.groups[0].id);
-    // 容器组件不住在分组里，没有归属可挑，也就不能因为「还没有分组」被拦住
-    if (!dockerMode && !group) return this.toast('还没有分组，先到「数据」栏新建一个', 3000, true);
+    // 组件不住在分组里，没有归属可挑，也就不能因为「还没有分组」被拦住
+    if (!tileMode && !group) return this.toast('还没有分组，先到「数据」栏新建一个', 3000, true);
     this.linkDraft = {
       id: link ? link.id : uid('l'),
-      groupId: dockerMode ? '' : group,
+      groupId: tileMode ? '' : group,
       isNew: !link,
       dockerMode,
+      resMode,
       title: link ? link.title : '',
-      url: link ? link.url : '',
-      urlLan: link ? link.urlLan || '' : '',
-      desc: link ? link.desc : '',
-      icon: link ? link.icon : kind === 'emoji' ? '🔗' : '',
+      url: resMode ? '' : link ? link.url : '',
+      urlLan: resMode ? '' : link ? link.urlLan || '' : '',
+      desc: resMode ? '' : link ? link.desc : '',
+      icon: link ? link.icon : kind === 'emoji' && !resMode ? '🔗' : '',
       iconKind: kind,
       container: dockerMode && link ? link.container || '' : '',
-      w: link && dockerMode ? link.w : DK_TILE.defW,
-      h: link && dockerMode ? link.h : DK_TILE.defH,
+      res: resMode && link ? link.res : '',
+      vol: resMode && link ? link.vol || '' : '',
+      rows: resMode && link && Array.isArray(link.rows) ? link.rows.slice() : null,
+      w: link && tileMode ? link.w : DK_TILE.defW,
+      h: link && tileMode ? link.h : DK_TILE.defH,
       // 编辑已有组件时坐标原样带回去；新建那张（走「容器一览」那条路）落在最下面一张的下方
-      x: link && dockerMode ? link.x : this.nextDockerPos().x,
-      y: link && dockerMode ? link.y : this.nextDockerPos().y,
+      x: link && tileMode ? link.x : this.nextDockerPos().x,
+      y: link && tileMode ? link.y : this.nextDockerPos().y,
     };
-    $('#linkModalTitle').textContent = dockerMode ? (link ? '编辑容器组件' : '新建容器组件') : link ? '编辑应用' : '新建应用';
+    $('#linkModalTitle').textContent =
+      resMode ? '编辑读数卡' : dockerMode ? (link ? '编辑容器组件' : '新建容器组件') : link ? '编辑应用' : '新建应用';
     $('#lkTitle').value = this.linkDraft.title;
     $('#lkUrl').value = this.linkDraft.url;
     $('#lkUrlLan').value = this.linkDraft.urlLan;
@@ -1997,6 +2013,15 @@ const App = {
     $('#lkEmoji').value = this.linkDraft.iconKind === 'emoji' ? this.linkDraft.icon : '';
     $('#lkImage').value = this.linkDraft.iconKind === 'image' ? this.linkDraft.icon : '';
     $('#lkDelete').hidden = !link;
+    // 读数卡只有「名称 + 图标」两件事可改，网址、备注、归属、绑容器那几行整个撤掉
+    $('#lkUrlRow').hidden = resMode;
+    $('#lkUrlLanRow').hidden = resMode;
+    $('#lkDescRow').hidden = resMode;
+    $('#lkResHint').hidden = !resMode;
+    for (const v of ['auto', 'letter']) {
+      const b = $('#iconKindSeg').querySelector(`button[data-v="${v}"]`);
+      if (b) b.hidden = resMode;
+    }
     const sel = $('#lkGroup');
     sel.innerHTML = '';
     for (const g of Store.cfg.groups) sel.append(new Option(g.name, g.id, false, g.id === group));
@@ -2011,13 +2036,14 @@ const App = {
 
   // 容器只写进草稿，点保存才落到配置：中途取消不该在主页上凭空多出一张卡
   paintLinkDocker() {
-    const docker = this.linkDraft.dockerMode;
-    // 容器组件不属于任何分组，那行归属下拉留着只会让人以为它还在分组网格里面
-    $('#lkGroupRow').hidden = docker;
+    const d = this.linkDraft;
+    const docker = d.dockerMode;
+    // 两类组件（容器卡与读数卡）都不属于任何分组，那行归属下拉留着只会让人以为它还在分组网格里面
+    $('#lkGroupRow').hidden = docker || d.resMode;
     $('#lkDockerRow').hidden = !docker;
     $('#lkDockerHint').hidden = !docker;
     if (!docker) return;
-    const name = this.linkDraft.container;
+    const name = d.container;
     $('#lkDockerName').textContent = name || '未选择';
     $('#lkDockerName').classList.toggle('unset', !name);
     const list = $('#lkDockerList');
@@ -2037,7 +2063,10 @@ const App = {
     const host = $('#lkPreview');
     const url = $('#lkUrl').value.trim() || $('#lkUrlLan').value.trim() || this.linkDraft.url || this.linkDraft.urlLan;
     host.innerHTML = '';
-    const node = this.iconNode({ ...this.linkDraft, url, title: this.linkDraft.title || '示例' });
+    // 读数卡留空图标 = 主页上那枚内置描边 SVG，预览得跟着画同一个，别退成首字
+    const node = this.linkDraft.resMode && !this.linkDraft.icon
+      ? this.resBuiltInIcon(this.linkDraft)
+      : this.iconNode({ ...this.linkDraft, url, title: this.linkDraft.title || '示例' });
     host.className = node.className;
     const kids = Array.from(node.childNodes);
     host.append(...kids);
@@ -2053,16 +2082,31 @@ const App = {
       d.url = normalizeUrl($('#lkUrl').value);
       d.urlLan = normalizeUrl($('#lkUrlLan').value);
       d.desc = $('#lkDesc').value.trim().slice(0, 200);
-      if (d.iconKind === 'emoji') d.icon = ($('#lkEmoji').value.trim() || '🔗').slice(0, 4);
+      // 读数卡的 Emoji 留空 = 用内置那枚描边 SVG，所以不能像应用卡那样补一个默认链接图标
+      if (d.iconKind === 'emoji') d.icon = ($('#lkEmoji').value.trim() || (d.resMode ? '' : '🔗')).slice(0, 4);
       if (d.iconKind === 'image') d.icon = normalizeUrl($('#lkImage').value);
       if (!d.title && (d.url || d.urlLan)) d.title = domainOf(d.url || d.urlLan) || d.url || d.urlLan;
       if (!d.title) return this.toast('请填写名称', 2500, true);
       if ($('#lkUrl').value.trim() && !d.url) return this.toast('外网网址协议不安全或格式不对', 3000, true);
       if ($('#lkUrlLan').value.trim() && !d.urlLan) return this.toast('内网网址协议不安全或格式不对', 3000, true);
       if (d.dockerMode && !d.container) return this.toast('请先选择一个容器', 3000, true);
-      if (!d.dockerMode && !d.url && !d.urlLan) return this.toast('请填写网址', 3000, true);
-      if (!d.dockerMode && !Store.cfg.groups.some((g) => g.id === targetGroup)) return this.toast('目标分组已不存在', 2500, true);
+      if (!d.dockerMode && !d.resMode && !d.url && !d.urlLan) return this.toast('请填写网址', 3000, true);
+      if (!d.dockerMode && !d.resMode && !Store.cfg.groups.some((g) => g.id === targetGroup)) return this.toast('目标分组已不存在', 2500, true);
       Store.mutate((c) => {
+        // 读数卡只认名称与图标：res / vol / rows 与宽高坐标都从草稿原样带回去，不然存一次就把这张卡改回出厂样子
+        if (d.resMode) {
+          const keep = { id: d.id, title: d.title, url: '', icon: d.icon, iconKind: d.iconKind, desc: '', res: d.res };
+          if (d.vol) keep.vol = d.vol;
+          if (d.rows && d.rows.length) keep.rows = d.rows;
+          keep.w = d.w;
+          keep.h = d.h;
+          keep.x = d.x;
+          keep.y = d.y;
+          const at = c.docker.items.findIndex((l) => l.id === d.id);
+          if (at >= 0) c.docker.items[at] = keep;
+          else c.docker.items.push(keep);
+          return;
+        }
         const payload = { id: d.id, title: d.title, url: d.url, icon: d.icon, iconKind: d.iconKind, desc: d.desc };
         // 空的可选字段不写进配置，字段顺序要和服务端规范化保持一致
         if (d.urlLan) payload.urlLan = d.urlLan;
@@ -2125,7 +2169,7 @@ const App = {
       const d = this.linkDraft;
       if (!confirm(`删除「${d.title}」？`)) return;
       Store.mutate((c) => {
-        if (d.dockerMode) {
+        if (d.dockerMode || d.resMode) {
           c.docker.items = c.docker.items.filter((l) => l.id !== d.id);
           return;
         }
@@ -2794,7 +2838,7 @@ const App = {
     return li;
   },
 
-  // 读数卡的行：名称 + 一串读数 + 移除 + 长宽滑块，没有可编辑的内容（标题跟着资源类型定死）
+  // 读数卡的行：名称 + 一串读数 + 改名改图标 + 移除 + 长宽滑块
   resRowLi(link) {
     const li = document.createElement('li');
     li.className = 'app-row dk-row';
@@ -2814,7 +2858,10 @@ const App = {
     meta.append(lead, text);
     const acts = document.createElement('div');
     acts.className = 'btn-row';
-    acts.append(this.miniBtn('✕', '移除这张读数卡（只是从主页摘掉，NAS 上的东西一点都不会动）', () => this.removeDockerItem(link)));
+    acts.append(
+      this.miniBtn('✎', '编辑：名称 / 图标', () => this.openLinkModal(link, '', 'res')),
+      this.miniBtn('✕', '移除这张读数卡（只是从主页摘掉，NAS 上的东西一点都不会动）', () => this.removeDockerItem(link))
+    );
     li.append(dot, name, meta, acts);
     // 自定义卡多一排勾选：主页那张卡上只留数字，勾哪儿在这儿
     if (link.res === 'custom') li.append(this.resPickBox(link));

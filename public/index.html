@@ -286,10 +286,11 @@
         <!-- 整列摊开这台 NAS 上的所有容器，点一个就换绑；不再走弹层和下拉 -->
         <div class="docker-list compact" id="lkDockerList"></div>
       </div>
-      <label class="row col"><span>外网网址</span><input class="field" id="lkUrl" placeholder="https://nas.example.com" maxlength="2000"></label>
-      <label class="row col"><span>内网网址（可选）</span><input class="field" id="lkUrlLan" placeholder="http://192.168.1.100:5000" maxlength="2000"></label>
+      <label class="row col" id="lkUrlRow"><span>外网网址</span><input class="field" id="lkUrl" placeholder="https://nas.example.com" maxlength="2000"></label>
+      <label class="row col" id="lkUrlLanRow"><span>内网网址（可选）</span><input class="field" id="lkUrlLan" placeholder="http://192.168.1.100:5000" maxlength="2000"></label>
       <p class="muted" id="lkDockerHint" hidden>容器组件按容器名取实时数据，启动 / 停止 / 重启在主页那张组件的右键菜单里；网址只是顺带一个入口，可留空。</p>
-      <label class="row col"><span>备注（可选，卡片上不占行，鼠标悬停时在提示里显示）</span><input class="field" id="lkDesc" maxlength="200"></label>
+      <p class="muted" id="lkResHint" hidden>读数卡的名字和图标随便改，读数本身改不了：勾哪几行在「应用矩阵」那一栏的这张卡下面。</p>
+      <label class="row col" id="lkDescRow"><span>备注（可选，卡片上不占行，鼠标悬停时在提示里显示）</span><input class="field" id="lkDesc" maxlength="200"></label>
       <div class="row col"><span>图标</span>
         <div class="seg" id="iconKindSeg">
           <button type="button" data-v="emoji">Emoji</button>

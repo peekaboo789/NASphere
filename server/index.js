@@ -956,8 +956,10 @@ function dockerAct(name, action) {
 // 自测用的前缀：把一份假的 proc / sys / host 目录树指过来，在没有 Linux 的开发机上也能跑通这套解析
 const SYS_ROOT = path.resolve(process.env.NAV_SYS_ROOT || '/');
 const SYS_TTL = 5000;
-// 只认物理盘的命名前缀：loop / ram / zram / sr / md / dm 都是包出来的设备，报成硬盘会误导
-const DISK_RE = /^(?:hd[a-z]|sd[a-z]|nvme\d+n\d+|mmcblk\d+|vd[a-z]|xvd[a-z])$/;
+// 认不出来就不是物理盘：loop / ram / zram 是内存兜出来的块设备，sr 是光驱，md 与 dm- 是 RAID / LVM 叠出来的，
+// nbd / fd / live 一类是网络与引导用的。用黑名单是因为各家的盘名实在不统一（sdX、nvmeXnY、mmcblkX，
+// 群晖那种 sata1 / sataA 也确有存在），照白名单猜会把真盘滤掉。
+const DISK_SKIP = /^(?:loop|ram|zram|sr|md|dm-|nbd|fd|live|dat|bgvt|ubi|mtd)/;
 // /sys/block/*/size 自己写着单位是 512 字节，跟机器扇区无关
 const SECTOR = 512;
 
@@ -1107,7 +1109,39 @@ function readNet() {
   return { down, up, warming };
 }
 
-// 核显 / 独显都认这一个文件：只有 intel_gt 与 amdgpu 那几类驱动会写，读不到就是读不到
+/* 各家驱动写占用的地方不一样，按「谁写得最准」依次试：
+   ① device/gpu_busy_percent —— amdgpu 与部分 nouveau 才有
+   ② 引擎目录下的 busy_percent —— i915 那一套（gt/gt0/rcs0/busy_percent），几个引擎取最大的：
+      一块显卡只要有一个引擎在忙就是忙，求平均会把正在转码的机器报成闲着
+   ③ 两处都没有：退回驱动名与核心频率，让卡片说得出「为什么没有占用」，而不是甩一句读不到 */
+const GT_ROOTS = ['', 'gt', 'gt/gt0', 'gt0', 'device/gt', 'device/gt/gt0'];
+const GT_ENG_RE = /^[a-z]{2,4}\d+$/;
+const GT_CUR = ['gt_cur_freq_mhz', 'gt/gt_cur_freq_mhz', 'gt/gt0/gt_cur_freq_mhz'];
+const GT_MAX = ['gt_max_freq_mhz', 'gt/gt_max_freq_mhz', 'gt/gt0/gt_max_freq_mhz'];
+
+function readDriverName(card) {
+  try {
+    return path.basename(fs.readlinkSync(sysPath('sys', 'class', 'drm', card, 'device', 'driver')));
+  } catch {
+    return '';
+  }
+}
+
+// 频率只有 i915 那套 sysfs 有，成对读才有意义：单看当前频率说明不了什么
+function readGtFreq(rel) {
+  let cur = NaN;
+  let max = NaN;
+  for (const p of GT_CUR) {
+    const v = Number(readSysText(rel(p)));
+    if (v > 0) { cur = v; break; }
+  }
+  for (const p of GT_MAX) {
+    const v = Number(readSysText(rel(p)));
+    if (v > 0) { max = v; break; }
+  }
+  return Number.isFinite(cur) && Number.isFinite(max) && max > 0 ? { cur, max } : null;
+}
+
 function readGpu() {
   let cards;
   try {
@@ -1116,37 +1150,65 @@ function readGpu() {
       .filter((n) => /^card\d+$/.test(n))
       .sort();
   } catch {
-    return { used: null };
+    return { used: null, note: '这台机器上没有 /sys/class/drm' };
   }
+  if (!cards.length) return { used: null, note: '这台机器的 drm 里没有显卡设备' };
+  let driver = '';
+  let freq = null;
   for (const n of cards) {
-    const raw = readSysText(path.join('sys', 'class', 'drm', n, 'device', 'gpu_busy_percent'));
+    const rel = (...p) => path.join('sys', 'class', 'drm', n, ...p);
+    const raw = readSysText(rel('device', 'gpu_busy_percent'));
     // 空串得先拦下来：Number('') 是 0，那样没写这一项的驱动会被报成「占用 0%」，比报读不到更糟
-    if (!raw) continue;
-    const v = Number(raw);
-    if (Number.isFinite(v) && v >= 0) return { used: Math.min(100, v) };
+    if (raw) {
+      const v = Number(raw);
+      if (Number.isFinite(v)) return { used: Math.min(100, Math.max(0, v)), note: '' };
+    }
+    for (const root of GT_ROOTS) {
+      let engs;
+      try {
+        engs = fs.readdirSync(sysPath('sys', 'class', 'drm', n, ...root.split('/')));
+      } catch {
+        continue;
+      }
+      const vals = [];
+      for (const e of engs) {
+        if (!GT_ENG_RE.test(e)) continue;
+        const t = readSysText(rel(root, e, 'busy_percent'));
+        if (!t) continue;
+        const v = Number(t);
+        if (Number.isFinite(v)) vals.push(v);
+      }
+      if (vals.length) return { used: Math.min(100, Math.round(Math.max(...vals))), note: '' };
+    }
+    if (!driver) driver = readDriverName(n);
+    if (!freq) freq = readGtFreq(rel);
   }
-  return { used: null };
+  const bits = [];
+  if (driver) bits.push('驱动 ' + driver + ' 不写占用率');
+  if (freq) bits.push(`当前 ${freq.cur} / 峰值 ${freq.max} MHz`);
+  return { used: null, note: bits.join(' · ') || '没有驱动写占用率' };
 }
 
 function readDisks() {
   let names;
   try {
-    names = fs
-      .readdirSync(sysPath('sys', 'block'), { withFileTypes: true })
-      .filter((d) => d.isDirectory() && DISK_RE.test(d.name))
-      .map((d) => d.name)
-      .sort();
+    // 别加 withFileTypes：/sys/block 下面每一项都是符号链接，Dirent 会说不「是目录」，
+    // 那样真机上每一块盘都会被滤掉（开发机上的仿真树是真目录，恰好看不出来）
+    names = fs.readdirSync(sysPath('sys', 'block'));
   } catch {
-    return [];
+    return { disks: [], note: '这台机器上没有 /sys/block' };
   }
   const out = [];
-  for (const name of names) {
+  for (const name of names.filter((n) => !DISK_SKIP.test(n)).sort()) {
     const blocks = Number(readSysText(path.join('sys', 'block', name, 'size')));
     // 0 块是空读卡器和光驱残留，列出来只会碍眼
     if (!(blocks > 0)) continue;
-    out.push({ name, model: readSysText(path.join('sys', 'block', name, 'device', 'model')).slice(0, 40), size: blocks * SECTOR });
+    const rel = ['sys', 'block', name, 'device'];
+    // 型号：SATA / NVMe 写 model，eMMC 那类写 name，两个都空就退回设备名
+    const model = readSysText(path.join(...rel, 'model')) || readSysText(path.join(...rel, 'name'));
+    out.push({ name, model: model.slice(0, 40), size: blocks * SECTOR });
   }
-  return out;
+  return { disks: out, note: out.length ? '' : '/sys/block 里没有可用的盘' };
 }
 
 // 目录 → 整个文件系统的容量账；statfs 只看目录本身，不碰里面的内容
@@ -1206,17 +1268,22 @@ function readVolumes() {
 const sysCache = ttlCache(SYS_TTL, SYS_TTL);
 
 function systemState() {
-  return sysCache.load(() => ({
-    ok: true,
-    error: '',
-    at: Date.now(),
-    memory: readMemory(),
-    cpu: readCpu(),
-    net: readNet(),
-    gpu: readGpu(),
-    volumes: readVolumes(),
-    disks: readDisks(),
-  }));
+  return sysCache.load(() => {
+    const disks = readDisks();
+    return {
+      ok: true,
+      error: '',
+      at: Date.now(),
+      memory: readMemory(),
+      cpu: readCpu(),
+      net: readNet(),
+      gpu: readGpu(),
+      volumes: readVolumes(),
+      disks: disks.disks,
+      // 硬盘那一项为什么空着：页面把这句原样写在行上，省得只看到「读不到」
+      diskNote: disks.note,
+    };
+  });
 }
 
 function handleLogin(req, res, body) {

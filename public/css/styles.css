@@ -1244,7 +1244,8 @@ body.holding-drag .dk-tile.dragging:hover { transform: none; }
     "icon title"
     "icon body";
 }
-/* 三枚图形是写死在 app.js 里的白色描边 SVG，画风跟顶栏那两个按钮一致 */
+/* 没改过图标时那四枚图形写死在 app.js 里（白色描边，画风跟顶栏那两个按钮一致）；
+   改过图标（Emoji 或上传的图片）走的是 .tile-icon 那套，跟容器卡、应用卡同一个尺寸 */
 .dk-res-icon svg {
   width: 100%;
   height: 100%;

@@ -6,7 +6,7 @@
 #   1. 检测 CPU 架构
 #   2. 准备安装目录（默认 ./dat）
 #   3. 生成 docker-compose.yml
-#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.3
+#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.4
 #   5. 起容器：docker compose up -d
 #
 # 装完之后目录里只有两样东西：compose 文件（每次部署由脚本重写）和 data/
@@ -41,7 +41,7 @@ DEFAULT_IMAGE="ghcr.io/peekaboo789/nasphere"
 
 # 默认镜像标签。发新版时改这一行（要和 ghcr.io 上推上去的标签对得上）。
 # 这里故意不跟 latest：latest 哪天被重推，机器上跑的东西就跟着变了，退不回去。
-DEFAULT_TAG="1.0.3"
+DEFAULT_TAG="1.0.4"
 
 # 容器内监听端口，和镜像里的 ENV PORT 一致。要改只改宿主机那侧（--port / HOST_PORT）
 APP_PORT="18086"
@@ -163,7 +163,7 @@ NASphere 一键安装 / 部署工具
 
   --root <目录>        安装到哪里，默认 ./dat（相对当前目录）
   --tar <文件>         加载 docker save 导出的离线镜像包，跳过从 GHCR 拉取
-  --tag <标签>         镜像标签，默认 1.0.3
+  --tag <标签>         镜像标签，默认 1.0.4
   --port <端口>        宿主机端口，默认 18086（容器内固定监听 18086）
   --data-dir <路径>    数据目录，默认 <安装目录>/data
   --dry-run            只显示操作，不执行、不落盘
@@ -194,7 +194,7 @@ NASphere 一键安装 / 部署工具
     ./dat
 
   镜像：
-    ghcr.io/peekaboo789/nasphere:1.0.3
+    ghcr.io/peekaboo789/nasphere:1.0.4
 
   compose 项目名：
     nasphere
