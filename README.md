@@ -123,7 +123,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.0.6
+镜像：ghcr.io/peekaboo789/nasphere:1.0.7
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -194,7 +194,7 @@ chmod +x deploy.sh
 ./deploy.sh --tag 1.1.0
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.6`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.7`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -251,7 +251,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.6`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.7`，拉下来直接起容器。
 
 默认访问：
 
@@ -284,8 +284,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.0.6-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.6 ghcr.io/peekaboo789/nasphere:1.0.6
+docker load -i nasphere-1.0.7-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.7 ghcr.io/peekaboo789/nasphere:1.0.7
 docker compose up -d
 ```
 
@@ -297,10 +297,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.6 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.7 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.0.6
+docker pull ghcr.io/peekaboo789/nasphere:1.0.7
 ```
 
 然后：
@@ -314,7 +314,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.6
+  ghcr.io/peekaboo789/nasphere:1.0.7
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -363,7 +363,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.0.6-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.0.7-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -661,7 +661,7 @@ NAS 总览
 CPU：占用百分比 + 核心数 + 1 分钟负载
 网络：下行 / 上行速率
 GPU：占用百分比（读不到就在同一行写明为什么读不到）
-存储空间：已用 / 剩余 / 总量 / 百分比
+存储空间：已用 / 剩余 / 总量 / 百分比（单指标那张卡末尾还带文件系统类型，比如 btrfs）
 物理盘：型号 + 已用 / 剩余 / 总量 / 百分比（一块都没认出来时，写的是卡在哪一步）
 ```
 
@@ -692,7 +692,7 @@ GPU：占用百分比（读不到就在同一行写明为什么读不到）
 /proc/stat      → CPU 的累计 ticks
 /proc/loadavg   → 1 / 5 / 15 分钟负载
 /proc/net/dev   → 每块网卡的收发字节
-/proc/self/mountinfo → 每个卷坐在哪个设备上（只取那一栏「主:次」设备号）
+/proc/self/mountinfo → 每个卷坐在哪个设备上、是什么文件系统（只取「主:次」那一栏和类型名，挂载点与来源都不读）
 /sys/class/drm  → 显卡占用：先看 gpu_busy_percent，再看每个引擎的 busy_percent（i915 只写后者）
 /sys/block      → 盘的设备名、型号、总容量，以及每个分区 / 每个叠出设备的设备号
 statfs()        → 某个目录所在文件系统的块数
@@ -702,7 +702,11 @@ statfs()        → 某个目录所在文件系统的块数
 认盘靠的是这一份排除名单，不是猜盘名前缀：`/sys/block` 下面每一项都是符号链接，各家机器的盘名也差得远。
 盘和卷对上号靠的也只有设备号那一段字符串（`/proc/self/mountinfo` 与 `/sys/block/<盘>/<分区>/dev` 写的
 是同一个「主:次」，两边都由内核自己格式化），挂载点路径与 `/dev/*` 名字都不出口。
-这些来源给的都是计数器，接口返回的字段全是数字与型号，页面不会列出一个文件名，也没有挂载点路径。
+挂载表里那个类型名用来做另一件事：`tmpfs` / `overlay` / `proc` / `sysfs` / `devtmpfs` / `squashfs` 这类虚拟
+文件系统坐在 `/host` 下面时不当一卷列出来（它们那串数字不是任何人的存储池）。`btrfs` / `ext4` / `xfs` / `zfs`
+和 `nfs` / `cifs` 这些真在用的类型一个都不滤。看不见挂载表时（容器里没有 `/proc`）一道过滤也不做，
+只是那一行不写类型。
+这些来源给的都是计数器，接口返回的字段全是数字、名字与类型，页面不会列出一个文件名，也没有挂载点路径。
 
 ## 卡片上那几句「读不到」是什么意思
 
@@ -722,15 +726,46 @@ statfs()        → 某个目录所在文件系统的块数
 
 ## 卷怎么列出来
 
-`deploy.sh` 每次部署都探一遍这台 NAS 上的存储池（`/vol1`、`/volume1`、`/storage1`、`/mnt/*` 这几种摆法），
-探到的每一卷自动写一行只读挂载进它生成的 compose：
+某一卷的已用 / 剩余 / 总量是对那个目录本身调一次 `statfs()` 拿到的，所以这一卷得先以只读挂载进容器的
+`/host` 下面。`deploy.sh` 每次部署都探一遍这台机器：从根目录数最多两层，凡是「跟自己的父目录不在同一个
+文件系统上」、并且文件系统类型不是虚拟那几类的目录都算一卷，各写一行只读挂载进它生成的 compose：
 
 ```text
-/volume1:/host/volume1:ro
+/vol1:/host/vol1:ro
+/vol00/HSH721414ALN6M0:/host/HSH721414ALN6M0:ro
+/share/CACHEDEV1_DATA:/host/CACHEDEV1_DATA:ro
 ```
 
-于是主页看得见这台机器上的每一卷，卡片认的名字就是 `/host` 下面那一层的目录名。同一块文件系统只报一次：
-数据目录正躺在某一卷里面时，列出来的是那一卷的名字，不再另出一张「数据盘」。
+这套认法不认路径名字：绿联和飞牛的 `/vol1`、群晖的 `/volume1`、威联通的 `/share/CACHEDEV1_DATA`、
+把池子挂在 `/mnt` 或 `/media` 底下那几种，走的都是同一句「比一下父目录的 st_dev」。父目录自己不是卷的
+（飞牛那个 `/vol00` 只是坐在根文件系统上的一个空壳）会再往里数一层；已经是卷的那个就不往里翻，免得 btrfs
+的子卷和容器的工作目录把清单撑长。`/proc` `/sys` `/dev` `/usr` `/var` `/snap` 这类系统树整个跳过，
+条目太多的目录也不进去，一次最多 16 卷，超出写在「跳过」那一行里。同一块文件系统只报一次：数据目录正躺在
+某一卷里面时，列出来的是那一卷的名字，不再另出一张「数据盘」。
+
+`/host` 下面那一层的名字是页面认卷用的 id，不是宿主机路径照抄：叶子名撞车时带上上一层（`/disk1/pool` 和
+`/disk2/pool` → `pool` 与 `disk2-pool`），中文卷名这种整个不在字符集里的落回上一层那个名，两层都不在就按
+顺序给一个（`vol3`）。卡片上显示的名字随时能在 ✎ 里改，改的只有显示名。
+
+登录后 `GET /api/system/state` 里的 `volumes` 就是这个形状（`total` / `used` / `avail` 是字节数，`pct`
+已经四舍五入到一位小数，`fs` 是挂载表里那一行写的文件系统类型）：
+
+```text
+"volumes": [
+  {
+    "id": "HSH721414ALN6M0",
+    "name": "HSH721414ALN6M0",
+    "fs": "btrfs",
+    "total": 13000000000000,
+    "used": 6000000000000,
+    "avail": 7000000000000,
+    "pct": 46.2
+  }
+]
+```
+
+画卡只用 `name` 和那四个数（`fs` 在单指标卡末尾多写一句），页面里没有任何一处写着宿主机路径，也没有
+任何一处按路径猜深度。
 
 不想让它自动探，就在 `.env` 里点名单：
 
@@ -751,6 +786,34 @@ NAS 上新增或删除卷之后要重跑一次 `./deploy.sh`，「NAS 资源」�
 
 ⚠️ 注意边界：挂载点一旦给进容器，容器进程技术上就能读那一卷的文件内容，哪怕页面只显示数字。
 逐卷用量换的是这个代价，不接受就写 `HOST_VOLUMES=none`。
+
+## 为什么不靠 docker.sock 拿宿主机容量
+
+容器里挂了 `/var/run/docker.sock`，也照样拿不到宿主机文件系统的账：
+
+```text
+docker system df   → 镜像 / 容器 / 卷各自占了多少，不是宿主机还剩多少
+docker info        → 存储驱动那几行数字是容器自己那层 overlay 的账
+```
+
+所以主页的卷读数一点没用上 socket，靠的是 `deploy.sh` 生成的那几行只读挂载：
+
+```text
+/volume1:/host/volume1:ro
+```
+
+在挂载点上调 `statfs()` 拿到的是宿主机那个超级块的数字，不是容器视角的 `df`。项目里没有 `df`、没有
+`child_process`，取数的来源全在「只报数字，不读内容」那一节列着。
+
+于是两件事各自独立：
+
+```text
+Docker 组件 → 要 socket，只到容器状态与启停为止
+逐卷用量   → 要 /host 那一行只读挂载，跟 socket 一点关系都没有
+```
+
+只挂 socket、没挂卷，主页就会写着「查不到这个卷（没挂进容器就读不到）」；这一句和「只挂 socket 能
+读到宿主机容量」是同一件事的两面。想让读数跑起来又多给一层权限，代价就是上面那条边界。
 
 ---
 
@@ -1351,11 +1414,11 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.0.6`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.0.7`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
-| `HOST_VOLUMES`  | 空（自动探）                 | 留空时 `deploy.sh` 自动探这台 NAS 的存储池，每一卷各挂成 `/host/<同名>:ro`；写空格分隔的目录就是点名单，`none` 是只挂数据目录、别探 |
+| `HOST_VOLUMES`  | 空（自动探）                 | 留空时 `deploy.sh` 探这台 NAS 的存储池（根下一层，再往下一层），每一卷各挂成 `/host/<名字>:ro`；写空格分隔的目录就是点名单，`none` 是只挂数据目录、别探 |
 | `COMPOSE_PROJECT` | `nasphere`                | compose 项目名，容器叫 `<项目名>-nasphere-1` |
 | `HEALTH_WAIT`   | `40`                       | 健康检查等待秒数      |
 | `KEEP_BACKUPS`  | `5`                        | `data/.deploy-backup/` 保留几份 |
@@ -1604,6 +1667,45 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.0.7
+
+改的是「某一卷到底能不能看见用量」这一件事：`deploy.sh` 探存储池不再认路径名字。
+
+```text
+以前　　→ 按 /vol1、/volume1、/storage1、/data1、/mnt/* 这几类摆法找
+现在　　→ 从根目录数最多两层，凡是「跟自己的父目录不在同一块文件系统上」的目录都算一卷
+```
+
+绿联和飞牛的 `/vol1`、群晖的 `/volume1`、威联通的 `/share/CACHEDEV1_DATA`、把池子摆在 `/mnt` 或 `/media`
+底下那几种，走的都是同一句判断。池子藏在二层下面的（`/vol00/<硬盘号>`、`/share/MD0_DATA`）现在也探得到，
+`/vol00` 那种自己不是卷的空壳会再往里数一层。`/proc` `/sys` `/dev` `/usr` `/var` `/snap` 这类系统树整个
+跳过，条目太多的目录不进去，一次最多 16 卷。`/host` 下面那一层的名字撞车时带上上一层，中文卷名也不会
+把整卷挤掉——主页上看得见的名字随时能在 ✎ 里改。
+
+卷现在多带一个文件系统类型：
+
+```text
+存储空间卡的句子末尾　→ 已用 6.0 TB · 剩 7.0 TB · 共 13 TB · btrfs
+```
+
+`btrfs` / `ext4` / `xfs` / `zfs` 这些真在用的类型一个都不滤，`nfs` / `cifs` 这类真远端也照样报容量。滤掉的是
+另一头：`tmpfs` / `overlay` / `proc` / `sysfs` / `devtmpfs` / `squashfs` 这些虚拟文件系统要是坐进了 `/host`
+下面，就不再当一卷列出来——那串数字不是任何人的存储池。
+
+新加一节「为什么不靠 docker.sock 拿宿主机容量」，把两件事的边界写明白：
+
+```text
+Docker 组件 → 要 socket，只到容器状态与启停为止
+逐卷用量   → 要 /host 那一行只读挂载，跟 socket 一点关系都没有
+```
+
+`docker system df` 给的是镜像、容器、卷各自占了多少，`docker info` 那几行数字是容器自己那层 overlay 的账，
+两处都不是宿主机文件系统的容量，所以卷的读数从来没用过 socket。某一卷的账是在它的只读挂载点上直接问文件
+系统要的，拿到的就是宿主机那一卷自己的数字——不是容器视角的那一套。主页上还是只有数字：接口里不写挂载点
+路径，也没有网卡名和文件名。
+
+详见「📊 NAS 资源组件」。
 
 ## v1.0.6
 

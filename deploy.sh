@@ -6,7 +6,7 @@
 #   1. 检测 CPU 架构
 #   2. 准备安装目录（默认 ./dat）
 #   3. 生成 docker-compose.yml
-#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.6
+#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.7
 #   5. 起容器：docker compose up -d
 #
 # 装完之后目录里只有两样东西：compose 文件（每次部署由脚本重写）和 data/
@@ -41,7 +41,7 @@ DEFAULT_IMAGE="ghcr.io/peekaboo789/nasphere"
 
 # 默认镜像标签。发新版时改这一行（要和 ghcr.io 上推上去的标签对得上）。
 # 这里故意不跟 latest：latest 哪天被重推，机器上跑的东西就跟着变了，退不回去。
-DEFAULT_TAG="1.0.6"
+DEFAULT_TAG="1.0.7"
 
 # 容器内监听端口，和镜像里的 ENV PORT 一致。要改只改宿主机那侧（--port / HOST_PORT）
 APP_PORT="18086"
@@ -163,7 +163,7 @@ NASphere 一键安装 / 部署工具
 
   --root <目录>        安装到哪里，默认 ./dat（相对当前目录）
   --tar <文件>         加载 docker save 导出的离线镜像包，跳过从 GHCR 拉取
-  --tag <标签>         镜像标签，默认 1.0.6
+  --tag <标签>         镜像标签，默认 1.0.7
   --port <端口>        宿主机端口，默认 18086（容器内固定监听 18086）
   --data-dir <路径>    数据目录，默认 <安装目录>/data
   --dry-run            只显示操作，不执行、不落盘
@@ -194,7 +194,7 @@ NASphere 一键安装 / 部署工具
     ./dat
 
   镜像：
-    ghcr.io/peekaboo789/nasphere:1.0.6
+    ghcr.io/peekaboo789/nasphere:1.0.7
 
   compose 项目名：
     nasphere
@@ -209,8 +209,11 @@ NASphere 一键安装 / 部署工具
     Asia/Shanghai
 
   逐卷读数（HOST_VOLUMES）：
-    留空 = 自动探测这台 NAS 上挂载的存储池，每一卷各加一行只读挂载进 /host/<目录名>，
-    主页的读数卡因此能看见全部卷和硬盘。NAS 上新增或删除卷之后要重跑一次本脚本才会更新。
+    留空 = 自动探测这台机器上的存储卷：根目录数两层，凡是「跟父目录不在同一个文件系统上」并且
+    不是 tmpfs / overlay 这类虚拟文件系统的目录都各加一行只读挂载进 /host/<挂点名>，主页的读数卡
+    因此能看见全部卷和硬盘。路径多深都不影响（/vol1、/volume1、/share/CACHEDEV1_DATA、
+    /vol00/<硬盘号> 都在这一套认法里），叶子名撞车时挂点名会自动带上上一层。
+    NAS 上新增或删除卷之后要重跑一次本脚本才会更新。
     想固定清单就写成空格分隔的绝对路径；HOST_VOLUMES=none 表示只挂数据目录、不探测。
 
   初始账号 / 密码：
@@ -660,13 +663,14 @@ case "$DATA_DIR" in
     ;;
 esac
 
-# 逐卷用量要挂进来的宿主机目录：HOST_VOLUMES 是空格分隔的清单，每一项各挂成 /host/<同名>:ro。
-# 页面只从 /host 那一层数出有几个目录，就列几卷，所以这里唯一的口径就是把目录名摆正。
-# 清单没写就先探一遍：家用 NAS 的存储池就那么几种摆法，探到的卷全部只读挂进来，主页于是能看见
-# 这台机器上的每一卷。写 HOST_VOLUMES=none 才是「只挂数据目录、别探」。
+# 逐卷用量要挂进来的宿主机目录：HOST_VOLUMES 是空格分隔的清单，每一项各挂成 /host/<挂点名>:ro。
+# 页面只从 /host 那一层数出有几个目录，就列几卷，所以这里唯一的口径就是把挂点名摆正。
+# 清单没写就先探一遍：把这台机器上真实存在的存储卷全部只读挂进来，主页于是能看见每一卷。
+# 写 HOST_VOLUMES=none 才是「只挂数据目录、别探」。
 EXTRA_MOUNTS=""
 VOL_AUTO=0
 VOL_SKIPPED=""
+VOL_USED_NAMES=""
 
 # 一卷的标志是「跟父目录不在同一个文件系统上」：同一个 st_dev 就是顺手建出来的空目录，不是卷
 is_volume_mount() {
@@ -676,25 +680,109 @@ is_volume_mount() {
   [ -n "$here" ] && [ -n "$there" ] && [ "$here" != "$there" ]
 }
 
-# 存储池的两种摆法：根目录下直接是池（/vol1 绿联 UGOS、/volume1 群晖），或者池挂在父目录下面（/mnt/*）
+# 虚拟文件系统没有容量可报：proc / sysfs 是内核自己的账，tmpfs 是内存，overlay 是容器这层的地盘，
+# squashfs 是 snap 那种只读镜像。stat 认不出类型（不是 GNU coreutils）时返回「不是虚拟的」，
+# 宁可多挂一卷也别少一列。sshfs / nfs / cifs 这些真远端有容量，不在这一列里。
+is_virtual_fs() {
+  local t
+  t="$(stat -f -c %T "$1" 2>/dev/null | tr 'A-Z' 'a-z')"
+  [ -n "$t" ] || return 1
+  case "$t" in
+    proc | procfs | sysfs | devtmpfs | devfs | tmpfs | ramfs | rootfs | runfs | hugetlbfs | cgroup | cgroup2 | cgroupfs | pstore | bpf | securityfs | selinuxfs | debugfs | tracefs | configfs | fusectl | mqueue | binfmt_misc | devpts | autofs | autofs4 | nsfs | overlay | overlayfs | fuse.overlayfs | squashfs | efivarfs | rpc_pipefs | sunrpc | udev | bdev | pipefs | sockfs | virtiofs)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# 根目录下面这些是系统自己的树，不当卷也不往里翻：里面要么全是挂载不来的东西（proc / sys / dev），
+# 要么一进去就是几万个目录（usr / var），把名额和遍历都留给别人的存储池
+VOL_SCAN_SKIP=" proc sys dev run usr lib lib32 lib64 bin sbin etc var tmp lost+found snap boot efi recovery root "
+
+TAB="$(printf '\t')"
+
+# 这一项值不值得当一卷：真的是卷 + 类型是真实文件系统 + 名字里没有空白（清单靠空格分隔，带空格的路径这一版接不住）
+vol_usable() {
+  local dir="$1" parent="$2"
+  [ -d "$dir" ] || return 1
+  case "$dir" in
+    *" " | *"$TAB"*) return 1 ;;
+  esac
+  is_volume_mount "$dir" "$parent" || return 1
+  ! is_virtual_fs "$dir"
+}
+
+# 通用探法：根目录数一层，每个目录先问它自己是不是卷；不是卷的那个（飞牛的 /vol00 只是坐在根文件
+# 系统上的空壳、威联通的 /share 同理）再往里数一层。往深只走两层，进了卷就不再往里看，条目太多
+# 的目录也不翻——遍历整机不是这次的目的，认出池子才是。
 detect_host_volumes() {
-  local found="" dir parent
-  for dir in /vol[0-9] /vol[0-9][0-9] /volume[0-9] /volume[0-9][0-9] /storage[0-9] /data[0-9]; do
-    case "$dir" in *'['* | *'*'*) continue ;; esac
+  local found="" dir sub n parent
+  for dir in /[^.]*; do
+    # 根目录自己不算一卷，也不算别人的父目录（它永远是卷的根）
+    [ "$dir" = "/" ] && continue
     [ -d "$dir" ] || continue
-    is_volume_mount "$dir" / || continue
-    found="$found $dir"
-  done
-  for parent in /mnt /media /storage; do
-    [ -d "$parent" ] || continue
-    for dir in "$parent"/*; do
-      case "$dir" in *'['* | *'*'*) continue ;; esac
-      [ -d "$dir" ] || continue
-      is_volume_mount "$dir" "$parent" || continue
+    parent="${dir#/}"
+    parent="${parent%%/*}"
+    case "$VOL_SCAN_SKIP" in
+      *" $parent "*) continue ;;
+    esac
+    if vol_usable "$dir" /; then
       found="$found $dir"
+      continue
+    fi
+    # 里面条目太多就不是存储池的摆法（一个池子底下最多几十块盘），先看眼数再决定要不要展开
+    n="$(ls -A "$dir" 2>/dev/null | head -70 | wc -l)"
+    [ "$n" -gt 64 ] && continue
+    for sub in "$dir"/*; do
+      vol_usable "$sub" "$dir" || continue
+      found="$found $sub"
     done
   done
   printf '%s' "$found" | sed 's/^ *//'
+}
+
+# 任意一段路径名 → 能当挂点名用的那一串：非法字符换成减号、连着的并成一个、两头清点掉、按给定长度截。
+# 中文卷名走的就是这一条：整段没了就是空串，由上面那一层去补名字。
+vol_name_clean() {
+  printf '%s' "$1" | LC_ALL=C sed -E -e 's/[^A-Za-z0-9._-]/-/g' -e 's/-{2,}/-/g' -e 's/^[._-]+//' -e 's/[-_.]+$//' | cut -c1-"$2"
+}
+
+# /host 下面那个挂点名就是卡片认卷用的 id：只用字母数字和 . _ -，打头必须是字母数字，最长 60。
+# 深层路径（/vol00/HSH721414ALN6M0、/share/CACHEDEV1_DATA）的叶子名会撞车，撞了就把上一层带上，
+# 还撞再加序号——同一台机器上两卷同名是常事，所以名字不能假定宿主机只摆一层。
+vol_mount_name() {
+  local path="$1" base parent cand n=0
+  base="$(vol_name_clean "$(basename "$path")" 40)"
+  parent="$(vol_name_clean "$(basename "$(dirname "$path")")" 18)"
+  while [ "$n" -lt 40 ]; do
+    n=$((n + 1))
+    case "$n" in
+      1) cand="$base" ;;
+      2) cand="${parent:+$parent-}$base" ;;
+      *) cand="${base:+$base-$((n - 1))}" ;;
+    esac
+    # 叶子名是空的（中文那种）时上一层后面跟的那个减号就多了，剪掉
+    cand="${cand%-}"
+    case "$cand" in '' | . | .. | [!A-Za-z0-9]*) continue ;; esac
+    case " $VOL_USED_NAMES " in
+      *" $cand "*) continue ;;
+    esac
+    printf '%s' "$cand"
+    return 0
+  done
+  # 叶子名和上一层都不剩 ASCII 的（/影视/素材 这种）：按顺序给一个名字。
+  # 页面认的是这一串，卡片上的小名他随时能改——总好过整卷从主页上消失
+  n=0
+  while [ "$n" -lt 200 ]; do
+    n=$((n + 1))
+    cand="vol$n"
+    case " $VOL_USED_NAMES " in
+      *" $cand "*) continue ;;
+    esac
+    printf '%s' "$cand"
+    return 0
+  done
+  return 1
 }
 
 # 一个目录 → 一行只读挂载。自动探到的那些不合适就悄悄跳过（一堆目录不该打断安装），
@@ -711,19 +799,11 @@ add_host_volume() {
       ;;
   esac
 
-  vol_name="$(basename "$host_vol")"
-
-  # 这个名字会直接写进 compose 的挂载点，也是卡片认卷用的 id，只留字母数字和 . _ -
-  case "$vol_name" in
-    '' | . | .. | .*)
-      [ "$auto" = 1 ] && { VOL_SKIPPED="$VOL_SKIPPED $vol_name"; return 0; }
-      die "HOST_VOLUMES 里这一项的目录名页面认不了（只能用字母、数字、点、减号、下划线）：$host_vol"
-      ;;
-    *[!A-Za-z0-9._-]*)
-      [ "$auto" = 1 ] && { VOL_SKIPPED="$VOL_SKIPPED $vol_name"; return 0; }
-      die "HOST_VOLUMES 里这一项的目录名页面认不了（只能用字母、数字、点、减号、下划线）：$host_vol"
-      ;;
-  esac
+  # 目录不存在时 compose 会替你先建一个空目录挂进来，看着就像一卷空的，所以这里提醒一句
+  if [ ! -d "$host_vol" ]; then
+    [ "$auto" = 1 ] && return 0
+    warn "HOST_VOLUMES 里这个目录现在不存在：$host_vol"
+  fi
 
   # 数据目录所在那一卷已经挂在 /app/data 了，再挂一遍只会多出个同名卷
   case "$DATA_DIR/" in
@@ -731,12 +811,19 @@ add_host_volume() {
       [ "$auto" = 1 ] && return 0
       ;;
   esac
+  # 反过来也一样：数据目录底下的东西不是这台 NAS 的存储池
+  case "$host_vol/" in
+    "$DATA_DIR"/*)
+      [ "$auto" = 1 ] && return 0
+      ;;
+  esac
 
-  # 目录不存在时 compose 会替你先建一个空目录挂进来，看着就像一卷空的，所以这里提醒一句
-  if [ ! -d "$host_vol" ]; then
-    [ "$auto" = 1 ] && return 0
-    warn "HOST_VOLUMES 里这个目录现在不存在：$host_vol"
-  fi
+  # 挂点名由这里定：路径多深、叶子名撞不撞车都不影响，页面认的是这一串而不是那串路径
+  vol_name="$(vol_mount_name "$host_vol")" || {
+    [ "$auto" = 1 ] && { VOL_SKIPPED="$VOL_SKIPPED $host_vol"; return 0; }
+    die "HOST_VOLUMES 里这一项取不出可用的挂点名：$host_vol"
+  }
+  VOL_USED_NAMES="$VOL_USED_NAMES $vol_name"
 
   EXTRA_MOUNTS="${EXTRA_MOUNTS}      - ${host_vol}:/host/${vol_name}:ro
 "

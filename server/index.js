@@ -1028,25 +1028,35 @@ function mountTable() {
   for (const line of raw.split('\n')) {
     const f = line.trim().split(/\s+/);
     if (f.length < 5 || !/^\d+:\d+$/.test(f[2])) continue;
-    out.push({ dev: f[2], mount: unescapeMount(f[4]) });
+    // 挂载点后面那串可选字段以单个 '-' 收口，'- ' 之后第一位就是文件系统类型。
+    // bind mount 抄的是宿主超级块，所以 /host/vol1 这一行写的类型就是宿主机那一卷自己的。
+    let sep = -1;
+    for (let i = 5; i < f.length; i++) {
+      if (f[i] === '-') {
+        sep = i;
+        break;
+      }
+    }
+    out.push({ dev: f[2], mount: unescapeMount(f[4]), fs: sep >= 0 ? f[sep + 1] || '' : '' });
   }
   return out;
 }
 
-// 这个目录坐在哪个设备上：取最长的那个挂载点前缀，跟 df 一个认法
-function devOfDir(mounts, dir) {
-  if (!mounts) return '';
+/* 虚拟文件系统没有「容量」这回事：proc / sysfs 那些是内核自己的账，tmpfs 是内存，overlay 是容器这层
+   的地盘，squashfs 是 snap 那种只读镜像。探到的卷落在这类上面就当它不是一卷，免得主页多出一行数字
+   对不上现实的条。fuse.sshfs、nfs、cifs 这些是真远端，容量报得出来，不在这一列里。 */
+const VIRTUAL_FS = /^(?:proc|procfs|sysfs|devtmpfs|devfs|tmpfs|ramfs|rootfs|runfs|hugetlbfs|cgroup2?|cgroupfs|pstore|bpf|securityfs|selinuxfs|debugfs|tracefs|configfs|fusectl|mqueue|binfmt_misc|devpts|autofs(?:4)?|nsfs|overlay(?:fs)?|squashfs|efivarfs|rpc_pipefs|sunrpc|udev|bdev|pipefs|sockfs|virtiofs)$/;
+
+// 这个目录坐在哪个设备上、是什么文件系统：取最长的那个挂载点前缀，跟 df 一个认法
+function mountOfDir(mounts, dir) {
+  if (!mounts) return { dev: '', fs: '' };
   const p = normPath(dir);
-  let dev = '';
-  let best = -1;
+  let hit = null;
   for (const m of mounts) {
     if (!(p === m.mount || p.startsWith(m.mount === '/' ? '/' : m.mount + '/'))) continue;
-    if (m.mount.length > best) {
-      best = m.mount.length;
-      dev = m.dev;
-    }
+    if (!hit || m.mount.length > hit.mount.length) hit = m;
   }
-  return dev;
+  return hit ? { dev: hit.dev, fs: hit.fs } : { dev: '', fs: '' };
 }
 
 /* 设备号 → 这个文件系统落在哪几块物理盘上。
@@ -1370,7 +1380,7 @@ function readDisks(vols, noMountinfo) {
 }
 
 // 目录 → 整个文件系统的容量账；statfs 只看目录本身，不碰里面的内容
-function readVolume(id, name, dir, mounts) {
+function readVolume(id, name, dir, mounts, fromHost) {
   let st;
   let dev;
   try {
@@ -1378,6 +1388,13 @@ function readVolume(id, name, dir, mounts) {
     const s = fs.statSync(dir);
     if (!s.isDirectory()) return null;
     dev = s.dev;
+  } catch {
+    return null;
+  }
+  const at = mountOfDir(mounts, dir);
+  // 数据目录那一卷永远留着：它至少是这台机器上一份真实的账，宁可它写着 overlay 也别让卡片空着
+  if (fromHost && VIRTUAL_FS.test(at.fs)) return null;
+  try {
     st = fs.statfsSync(dir);
   } catch {
     return null;
@@ -1388,9 +1405,9 @@ function readVolume(id, name, dir, mounts) {
   if (!(unit > 0) || !(total > 0)) return null;
   const used = Math.max(0, (st.blocks - st.bfree) * unit);
   const pct = Math.min(100, Math.max(0, (used / total) * 100));
-  // 挂载点路径不给前端：那一串字符对页面没用，接口里留纯数字和名字边界更干净
-  const vol = { id, name, total, used, avail: st.bavail * unit, pct: Math.round(pct * 10) / 10 };
-  return { dev, devId: devOfDir(mounts, dir), vol };
+  // 挂载点路径不给前端：那一串字符对页面没用，接口里留纯数字、名字和文件系统类型
+  const vol = { id, name, fs: at.fs, total, used, avail: st.bavail * unit, pct: Math.round(pct * 10) / 10 };
+  return { dev, devId: at.dev, vol };
 }
 
 function readVolumes() {
@@ -1404,7 +1421,7 @@ function readVolumes() {
       // 认不出这个名字的目录就当没看见：卡片按 id 认卷，隐藏目录和带怪字符的名字进不了配置
       .filter((n) => VOL_ID_RE.test(n))
       .sort()) {
-      candidates.push({ id: name, name, dir: sysPath('host', name) });
+      candidates.push({ id: name, name, dir: sysPath('host', name), host: true });
     }
   } catch {
     // 没挂 /host 就只剩数据目录，这本来的默认样子
@@ -1413,7 +1430,7 @@ function readVolumes() {
   const seen = new Set();
   const out = [];
   for (const c of candidates) {
-    const hit = readVolume(c.id, c.name, c.dir, mounts);
+    const hit = readVolume(c.id, c.name, c.dir, mounts, c.host);
     if (!hit) continue;
     // 同一个文件系统只报一次：数据目录常常就摆在某一卷里面
     if (hit.dev) {

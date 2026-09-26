@@ -229,14 +229,16 @@ function resPickSignature() {
 const resHas = (v) => Number.isFinite(v);
 
 // 容量行的两种写法：多行卡地方小，只写「还剩多少 / 一共多少」，单指标卡有地方读整句
-function usageOf(compact, total, used, avail) {
+// 最后一档是文件系统类型（btrfs / ext4 / xfs），只在单指标卡上写：那一串对认卷有用，对量没用
+function usageOf(compact, total, used, avail, tail) {
   if (!(total > 0)) return { note: '读不到用量' };
   const pct = Math.min(100, Math.max(0, (used / total) * 100));
+  const text = compact
+    ? `剩 ${fmtBytes(avail)} / ${fmtBytes(total)}`
+    : `已用 ${fmtBytes(used)} · 剩 ${fmtBytes(avail)} · 共 ${fmtBytes(total)}`;
   return {
     pct,
-    note: compact
-      ? `剩 ${fmtBytes(avail)} / ${fmtBytes(total)}`
-      : `已用 ${fmtBytes(used)} · 剩 ${fmtBytes(avail)} · 共 ${fmtBytes(total)}`,
+    note: text + (!compact && tail ? ` · ${tail}` : ''),
   };
 }
 
@@ -282,13 +284,13 @@ function resRowOf(key, d, compact) {
     const list = (key === 'vols' ? d.volumes : d.disks) || [];
     if (!list.length) return [{ rk: key, k: key === 'vols' ? '存储卷' : '硬盘', note: (key === 'disks' && d.diskNote ? d.diskNote : '读不到') }];
     return key === 'vols'
-      ? list.map((v) => ({ rk: 'vol:' + v.id, k: v.name, ...usageOf(compact, v.total, v.used, v.avail) }))
+      ? list.map((v) => ({ rk: 'vol:' + v.id, k: v.name, ...usageOf(compact, v.total, v.used, v.avail, v.fs) }))
       : list.map((x) => diskLine('disk:' + x.name, x, compact));
   }
   const id = key.slice(key.indexOf(':') + 1);
   if (key.startsWith('vol:')) {
     const v = ((d.volumes || []).find((x) => x.id === id)) || null;
-    return [v ? { rk: key, k: v.name, ...usageOf(compact, v.total, v.used, v.avail) } : { rk: key, k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
+    return [v ? { rk: key, k: v.name, ...usageOf(compact, v.total, v.used, v.avail, v.fs) } : { rk: key, k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
   }
   if (key.startsWith('disk:')) {
     const x = ((d.disks || []).find((y) => y.name === id)) || null;
@@ -2411,7 +2413,7 @@ const App = {
       { kind: 'mem', name: RES_NAME.mem, state: fmtPct(memPct), note: d && d.memory ? usageOf(false, d.memory.total, d.memory.used, d.memory.avail).note : '' },
       { kind: 'custom', name: RES_NAME.custom, state: `${RES_CUSTOM_DEFAULT.length} 行`, note: '默认 ' + RES_CUSTOM_DEFAULT.map((k) => resMetricLabel(k)).join(' / ') },
     ];
-    for (const v of (d && d.volumes) || []) rows.push({ kind: 'vol', vol: v.id, name: v.name, state: fmtPct(v.pct), note: usageOf(false, v.total, v.used, v.avail).note });
+    for (const v of (d && d.volumes) || []) rows.push({ kind: 'vol', vol: v.id, name: v.name, state: fmtPct(v.pct), note: usageOf(false, v.total, v.used, v.avail, v.fs).note });
     for (const r of rows) {
       const s = this.resRowState(r.kind, r.vol);
       const b = document.createElement('button');
