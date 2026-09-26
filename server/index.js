@@ -961,6 +961,8 @@ function dockerAct(name, action) {
      · 网络取 /proc/net/dev 的收发字节，同样作差成速率；回环和 Docker 自己的网桥不算
      · 核显只读 /sys/class/drm 下每张 card 的 device/gpu_busy_percent，驱动不写这一项就如实报读不到
      · 物理盘取 /sys/block 的目录名、size 与 device/model，那里只有型号和大小，从来不是路径
+     · 盘上「用了多少」是拿 /proc/self/mountinfo 第三栏的设备号对上 /sys/block/<盘>/<分区>/dev 归过去的，
+       全程只比数字串，挂载点路径与 /dev 名字都不出口
      · 每个卷只对目录本身调一次 statfs：那是整个文件系统的账，返回里不会出现一个文件名
    候选卷 = 数据目录 + 挂进来的 /host 第一层目录。宿主机没挂进来的目录在容器里本来就不存在，
    所以 deploy.sh 每探到一卷就往 compose 里写一行只读挂载，页面自己就多出一张卷卡片，这里不需要配开关。 */
@@ -983,6 +985,120 @@ function readSysText(rel) {
   } catch {
     return '';
   }
+}
+
+const devFile = (rel) => {
+  const t = readSysText(rel);
+  return /^\d+:\d+$/.test(t) ? t : '';
+};
+
+// 只认名字，不看类型：/sys/block 下面每一项都是符号链接，用 withFileTypes + isDirectory 会一块盘都不剩
+// （开发机上那棵仿真树全是真目录，恰好看不出来这个坑——真机 v1.0.4 就栽在这儿）
+function readSysDir(rel) {
+  try {
+    return fs.readdirSync(sysPath(rel));
+  } catch {
+    return [];
+  }
+}
+
+/* 盘对到用量上靠的是设备号：/proc/self/mountinfo 第三栏写的「主:次」，和 /sys/block/<盘>/<分区>/dev
+   写的是同一个字符串（两边都由内核自己格式化，没有编码口径的问题）。拿它当线索，接口里就不用出现挂载点。 */
+const CI_PATH = process.platform === 'win32';
+
+function normPath(p) {
+  const s = String(p).replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+  const t = s || '/';
+  return CI_PATH ? t.toLowerCase() : t;
+}
+
+// mountinfo 里的挂载点把空格和制表符写成 \040 这样的八进制，所以按空白切字段是安全的，读进来再还原
+function unescapeMount(p) {
+  return normPath(p.replace(/\\(040|011|012|134)/g, (_, o) => ({ '040': ' ', '011': '\t', '012': '\n', '134': '\\' }[o])));
+}
+
+function mountTable() {
+  let raw;
+  try {
+    raw = fs.readFileSync(sysPath('proc', 'self', 'mountinfo'), 'utf8');
+  } catch {
+    return null;
+  }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    const f = line.trim().split(/\s+/);
+    if (f.length < 5 || !/^\d+:\d+$/.test(f[2])) continue;
+    out.push({ dev: f[2], mount: unescapeMount(f[4]) });
+  }
+  return out;
+}
+
+// 这个目录坐在哪个设备上：取最长的那个挂载点前缀，跟 df 一个认法
+function devOfDir(mounts, dir) {
+  if (!mounts) return '';
+  const p = normPath(dir);
+  let dev = '';
+  let best = -1;
+  for (const m of mounts) {
+    if (!(p === m.mount || p.startsWith(m.mount === '/' ? '/' : m.mount + '/'))) continue;
+    if (m.mount.length > best) {
+      best = m.mount.length;
+      dev = m.dev;
+    }
+  }
+  return dev;
+}
+
+/* 设备号 → 这个文件系统落在哪几块物理盘上。
+   sysfs 的规矩是分区目录坐在它那块盘的目录底下（sda/sda1、nvme0n1/nvme0n1p1、md127/md127p1），
+   所以「哪块盘的分区」按目录归属认，不拿名字猜前缀——群晖那种 sata1 和 sata12 摆在一起时前缀会认错。
+   md / dm- 这类叠出来的设备自己不存数据，往下翻成员（RAID1 会翻出两块盘，那份用量是整组的）。 */
+function blockOwnersByDev() {
+  const names = readSysDir(path.join('sys', 'block'));
+  if (!names.length) return null;
+  const isDisk = new Set(names.filter((n) => !DISK_SKIP.test(n)));
+  const childOf = new Map();
+  const byDev = new Map();
+  const put = (dev, list) => {
+    if (dev && list && list.length && !byDev.has(dev)) byDev.set(dev, list);
+  };
+  for (const n of names) {
+    const here = path.join('sys', 'block', n);
+    if (isDisk.has(n)) put(devFile(path.join(here, 'dev')), [n]);
+    for (const k of readSysDir(here)) {
+      if (!k.startsWith(n) || !/^p?\d+$/.test(k.slice(n.length))) continue;
+      childOf.set(k, n);
+      if (isDisk.has(n)) put(devFile(path.join(here, k, 'dev')), [n]);
+    }
+  }
+  const ownersOf = (node, depth, seen) => {
+    const out = new Set();
+    if (depth > 4 || seen.has(node)) return out;
+    seen.add(node);
+    if (isDisk.has(node)) return out.add(node);
+    const parent = childOf.get(node);
+    if (parent) return ownersOf(parent, depth + 1, seen);
+    for (const k of readSysDir(path.join('sys', 'block', node, 'slaves'))) {
+      for (const x of ownersOf(k, depth + 1, seen)) out.add(x);
+    }
+    if (out.size) return out;
+    // md 那类老结构没有 slaves，成员写在 md/dev-xxx/block/dev 里，记的还是设备号
+    for (const d of readSysDir(path.join('sys', 'block', node, 'md'))) {
+      const hit = byDev.get(devFile(path.join('sys', 'block', node, 'md', d, 'block', 'dev')));
+      if (hit) for (const x of hit) out.add(x);
+    }
+    return out;
+  };
+  for (const n of names) {
+    if (isDisk.has(n)) continue;
+    put(devFile(path.join('sys', 'block', n, 'dev')), [...ownersOf(n, 0, new Set())]);
+  }
+  // 叠出来的设备自己也可能分了区（md127p1），成员跟它的父节点一样
+  for (const [child, parent] of childOf) {
+    if (isDisk.has(parent)) continue;
+    put(devFile(path.join('sys', 'block', parent, child, 'dev')), [...ownersOf(child, 0, new Set())]);
+  }
+  return byDev;
 }
 
 function memFromOs() {
@@ -1201,15 +1317,31 @@ function readGpu() {
   return { used: null, note: bits.join(' · ') || '没有驱动写占用率' };
 }
 
-function readDisks() {
-  let names;
-  try {
-    // 别加 withFileTypes：/sys/block 下面每一项都是符号链接，Dirent 会说不「是目录」，
-    // 那样真机上每一块盘都会被滤掉（开发机上的仿真树是真目录，恰好看不出来）
-    names = fs.readdirSync(sysPath('sys', 'block'));
-  } catch {
-    return { disks: [], note: '这台机器上没有 /sys/block' };
+function readDisks(vols, noMountinfo) {
+  const names = readSysDir(path.join('sys', 'block'));
+  if (!names.length) return { disks: [], note: '这台机器上没有 /sys/block' };
+  // 每卷的账按设备号归到盘上：一块文件系统摊在几块盘上（镜像、阵列），这几块盘各记一次整组的账
+  const byDev = blockOwnersByDev();
+  const tally = new Map();
+  for (const v of vols) {
+    const owners = v.dev && byDev ? byDev.get(v.dev) : null;
+    if (!owners) continue;
+    for (const d of owners) {
+      const t = tally.get(d) || { used: 0, total: 0, avail: 0, shared: false };
+      t.used += v.used;
+      t.total += v.total;
+      t.avail += v.avail;
+      if (owners.length > 1) t.shared = true;
+      tally.set(d, t);
+    }
   }
+  const why = noMountinfo
+    ? '这台机器上没有 /proc/self/mountinfo'
+    : !vols.length
+      ? '这一层里没挂进来的卷'
+      : !vols.some((v) => v.dev)
+        ? '挂载表里对不上这些卷的路径'
+        : '没找到挂在这块盘上的文件系统';
   const out = [];
   for (const name of names.filter((n) => !DISK_SKIP.test(n)).sort()) {
     const blocks = Number(readSysText(path.join('sys', 'block', name, 'size')));
@@ -1218,13 +1350,27 @@ function readDisks() {
     const rel = ['sys', 'block', name, 'device'];
     // 型号：SATA / NVMe 写 model，eMMC 那类写 name，两个都空就退回设备名
     const model = readSysText(path.join(...rel, 'model')) || readSysText(path.join(...rel, 'name'));
-    out.push({ name, model: model.slice(0, 40), size: blocks * SECTOR });
+    const row = { name, model: model.slice(0, 40), size: blocks * SECTOR };
+    const t = tally.get(name);
+    if (t && t.total > 0) {
+      // 这里的 total 是这块盘上文件系统加起来的容量，不是 /sys/block 那个裸盘容量：
+      // 分区表、没分出去的空格都算不进「还能写多少」，文件系统满才是真满
+      row.total = t.total;
+      row.used = t.used;
+      row.avail = t.avail;
+      row.pct = Math.round(Math.min(100, Math.max(0, (t.used / t.total) * 100)) * 10) / 10;
+      if (t.shared) row.shared = true;
+    } else {
+      row.used = null;
+      row.why = why;
+    }
+    out.push(row);
   }
   return { disks: out, note: out.length ? '' : '/sys/block 里没有可用的盘' };
 }
 
 // 目录 → 整个文件系统的容量账；statfs 只看目录本身，不碰里面的内容
-function readVolume(id, name, dir) {
+function readVolume(id, name, dir, mounts) {
   let st;
   let dev;
   try {
@@ -1243,10 +1389,12 @@ function readVolume(id, name, dir) {
   const used = Math.max(0, (st.blocks - st.bfree) * unit);
   const pct = Math.min(100, Math.max(0, (used / total) * 100));
   // 挂载点路径不给前端：那一串字符对页面没用，接口里留纯数字和名字边界更干净
-  return { dev, vol: { id, name, total, used, avail: st.bavail * unit, pct: Math.round(pct * 10) / 10 } };
+  const vol = { id, name, total, used, avail: st.bavail * unit, pct: Math.round(pct * 10) / 10 };
+  return { dev, devId: devOfDir(mounts, dir), vol };
 }
 
 function readVolumes() {
+  const mounts = mountTable();
   // 挂进来的存储池排在前面：数据目录十有八九就躺在某一卷里面，同一块文件系统该留池子的名字，
   // 而不是留「数据盘」这个只对这台容器有意义的叫法
   const candidates = [];
@@ -1265,23 +1413,28 @@ function readVolumes() {
   const seen = new Set();
   const out = [];
   for (const c of candidates) {
-    const hit = readVolume(c.id, c.name, c.dir);
+    const hit = readVolume(c.id, c.name, c.dir, mounts);
     if (!hit) continue;
     // 同一个文件系统只报一次：数据目录常常就摆在某一卷里面
     if (hit.dev) {
       if (seen.has(hit.dev)) continue;
       seen.add(hit.dev);
     }
-    out.push(hit.vol);
+    out.push(hit);
   }
-  return out;
+  return { hits: out, noMountinfo: !mounts };
 }
 
 const sysCache = ttlCache(SYS_TTL, SYS_TTL);
 
 function systemState() {
   return sysCache.load(() => {
-    const disks = readDisks();
+    // 卷要先读：硬盘那一行的已用与百分比是从每卷的文件系统账按设备号归过去的
+    const vols = readVolumes();
+    const disks = readDisks(
+      vols.hits.map((h) => ({ dev: h.devId, ...h.vol })),
+      vols.noMountinfo
+    );
     return {
       ok: true,
       error: '',
@@ -1290,7 +1443,7 @@ function systemState() {
       cpu: readCpu(),
       net: readNet(),
       gpu: readGpu(),
-      volumes: readVolumes(),
+      volumes: vols.hits.map((h) => h.vol),
       disks: disks.disks,
       // 硬盘那一项为什么空着：页面把这句原样写在行上，省得只看到「读不到」
       diskNote: disks.note,

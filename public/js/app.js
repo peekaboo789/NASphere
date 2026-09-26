@@ -228,19 +228,34 @@ function resPickSignature() {
 
 const resHas = (v) => Number.isFinite(v);
 
+// 容量行的两种写法：多行卡地方小，只写「还剩多少 / 一共多少」，单指标卡有地方读整句
+function usageOf(compact, total, used, avail) {
+  if (!(total > 0)) return { note: '读不到用量' };
+  const pct = Math.min(100, Math.max(0, (used / total) * 100));
+  return {
+    pct,
+    note: compact
+      ? `剩 ${fmtBytes(avail)} / ${fmtBytes(total)}`
+      : `已用 ${fmtBytes(used)} · 剩 ${fmtBytes(avail)} · 共 ${fmtBytes(total)}`,
+  };
+}
+
+// 一块盘的一行：认得出它上面的文件系统就跟卷一样画已用 / 剩余 / 百分比，认不出就退回只报容量并说明为什么
+function diskLine(rk, x, compact) {
+  const k = x.model || x.name;
+  if (!resHas(x.used) || !(x.total > 0)) return { rk, k, note: fmtBytes(x.size) + (x.why ? '（' + x.why + '）' : '') };
+  const r = { rk, k, ...usageOf(compact, x.total, x.used, x.avail) };
+  // 镜像、阵列的文件系统摊在几块盘上，这份用量分不到单块盘，整组的数字挂在每一行上
+  if (x.shared && !compact && r.note) r.note += '（整组叠出来的）';
+  return r;
+}
+
 // 一个键 → 这一张卡上的几行。有百分数的行给容量条，没有的（速率、盘容量）只给一行字
 // 每行都带回自己的 rk：展开出来的「全部卷 / 全部硬盘」要落到具体的卷 id、盘名上，行的小名才按那一行查
 function resRowOf(key, d, compact) {
-  const usage = (total, used) =>
-    total > 0
-      ? {
-          pct: Math.min(100, Math.max(0, (used / total) * 100)),
-          note: compact ? `${fmtBytes(used)} / ${fmtBytes(total)}` : `已用 ${fmtBytes(used)} · 共 ${fmtBytes(total)}`,
-        }
-      : { note: '读不到用量' };
   if (key === 'mem') {
     const m = d.memory;
-    return [{ rk: 'mem', k: '内存', ...(m ? usage(m.total, m.used) : { note: '读不到内存' }) }];
+    return [{ rk: 'mem', k: '内存', ...(m ? usageOf(compact, m.total, m.used, m.avail) : { note: '读不到内存' }) }];
   }
   if (key === 'cpu') {
     const c = d.cpu || {};
@@ -267,17 +282,17 @@ function resRowOf(key, d, compact) {
     const list = (key === 'vols' ? d.volumes : d.disks) || [];
     if (!list.length) return [{ rk: key, k: key === 'vols' ? '存储卷' : '硬盘', note: (key === 'disks' && d.diskNote ? d.diskNote : '读不到') }];
     return key === 'vols'
-      ? list.map((v) => ({ rk: 'vol:' + v.id, k: v.name, ...usage(v.total, v.used) }))
-      : list.map((x) => ({ rk: 'disk:' + x.name, k: x.model || x.name, note: fmtBytes(x.size) }));
+      ? list.map((v) => ({ rk: 'vol:' + v.id, k: v.name, ...usageOf(compact, v.total, v.used, v.avail) }))
+      : list.map((x) => diskLine('disk:' + x.name, x, compact));
   }
   const id = key.slice(key.indexOf(':') + 1);
   if (key.startsWith('vol:')) {
     const v = ((d.volumes || []).find((x) => x.id === id)) || null;
-    return [v ? { rk: key, k: v.name, ...usage(v.total, v.used) } : { rk: key, k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
+    return [v ? { rk: key, k: v.name, ...usageOf(compact, v.total, v.used, v.avail) } : { rk: key, k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
   }
   if (key.startsWith('disk:')) {
     const x = ((d.disks || []).find((y) => y.name === id)) || null;
-    return [x ? { rk: key, k: x.model || x.name, note: fmtBytes(x.size) } : { rk: key, k: id || '没选硬盘', note: '查不到这块硬盘' + (d.diskNote ? '（' + d.diskNote + '）' : '') }];
+    return [x ? diskLine(key, x, compact) : { rk: key, k: id || '没选硬盘', note: '查不到这块硬盘' + (d.diskNote ? '（' + d.diskNote + '）' : '') }];
   }
   return [{ rk: key, k: key, note: '不认识的行' }];
 }
@@ -2393,10 +2408,10 @@ const App = {
     const memPct = d && d.memory && d.memory.total > 0 ? (d.memory.used / d.memory.total) * 100 : null;
     const rows = [
       { kind: 'overview', name: RES_NAME.overview, state: fmtPct(memPct), note: d ? `内存 + CPU + 网络 + GPU + ${d.volumes.length} 卷 + ${(d.disks || []).length} 盘` : '' },
-      { kind: 'mem', name: RES_NAME.mem, state: fmtPct(memPct), note: d && d.memory ? `已用 ${fmtBytes(d.memory.used)} · 共 ${fmtBytes(d.memory.total)}` : '' },
+      { kind: 'mem', name: RES_NAME.mem, state: fmtPct(memPct), note: d && d.memory ? usageOf(false, d.memory.total, d.memory.used, d.memory.avail).note : '' },
       { kind: 'custom', name: RES_NAME.custom, state: `${RES_CUSTOM_DEFAULT.length} 行`, note: '默认 ' + RES_CUSTOM_DEFAULT.map((k) => resMetricLabel(k)).join(' / ') },
     ];
-    for (const v of (d && d.volumes) || []) rows.push({ kind: 'vol', vol: v.id, name: v.name, state: fmtPct(v.pct), note: `已用 ${fmtBytes(v.used)} · 共 ${fmtBytes(v.total)}` });
+    for (const v of (d && d.volumes) || []) rows.push({ kind: 'vol', vol: v.id, name: v.name, state: fmtPct(v.pct), note: usageOf(false, v.total, v.used, v.avail).note });
     for (const r of rows) {
       const s = this.resRowState(r.kind, r.vol);
       const b = document.createElement('button');
