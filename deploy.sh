@@ -6,7 +6,7 @@
 #   1. 检测 CPU 架构
 #   2. 准备安装目录（默认 ./dat）
 #   3. 生成 docker-compose.yml
-#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.2
+#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.3
 #   5. 起容器：docker compose up -d
 #
 # 装完之后目录里只有两样东西：compose 文件（每次部署由脚本重写）和 data/
@@ -41,7 +41,7 @@ DEFAULT_IMAGE="ghcr.io/peekaboo789/nasphere"
 
 # 默认镜像标签。发新版时改这一行（要和 ghcr.io 上推上去的标签对得上）。
 # 这里故意不跟 latest：latest 哪天被重推，机器上跑的东西就跟着变了，退不回去。
-DEFAULT_TAG="1.0.2"
+DEFAULT_TAG="1.0.3"
 
 # 容器内监听端口，和镜像里的 ENV PORT 一致。要改只改宿主机那侧（--port / HOST_PORT）
 APP_PORT="18086"
@@ -163,7 +163,7 @@ NASphere 一键安装 / 部署工具
 
   --root <目录>        安装到哪里，默认 ./dat（相对当前目录）
   --tar <文件>         加载 docker save 导出的离线镜像包，跳过从 GHCR 拉取
-  --tag <标签>         镜像标签，默认 1.0.2
+  --tag <标签>         镜像标签，默认 1.0.3
   --port <端口>        宿主机端口，默认 18086（容器内固定监听 18086）
   --data-dir <路径>    数据目录，默认 <安装目录>/data
   --dry-run            只显示操作，不执行、不落盘
@@ -181,6 +181,7 @@ NASphere 一键安装 / 部署工具
   KEEP_BACKUPS
   DOCKER_SOCK
   TZ
+  HOST_VOLUMES
   COMPOSE_PROJECT
 
 生效顺序：命令行 > 环境变量 > .env > 默认值
@@ -193,7 +194,7 @@ NASphere 一键安装 / 部署工具
     ./dat
 
   镜像：
-    ghcr.io/peekaboo789/nasphere:1.0.2
+    ghcr.io/peekaboo789/nasphere:1.0.3
 
   compose 项目名：
     nasphere
@@ -206,6 +207,11 @@ NASphere 一键安装 / 部署工具
 
   时区：
     Asia/Shanghai
+
+  逐卷读数（HOST_VOLUMES）：
+    留空 = 自动探测这台 NAS 上挂载的存储池，每一卷各加一行只读挂载进 /host/<目录名>，
+    主页的读数卡因此能看见全部卷和硬盘。NAS 上新增或删除卷之后要重跑一次本脚本才会更新。
+    想固定清单就写成空格分隔的绝对路径；HOST_VOLUMES=none 表示只挂数据目录、不探测。
 
   初始账号 / 密码：
     admin / admin123（镜像内置的默认值，装完立刻登录去「设置 → 安全」改掉）
@@ -654,16 +660,53 @@ case "$DATA_DIR" in
     ;;
 esac
 
-# 逐卷用量：HOST_VOLUMES 是空格分隔的宿主机目录清单，每一项各挂成 /host/<同名>:ro。
+# 逐卷用量要挂进来的宿主机目录：HOST_VOLUMES 是空格分隔的清单，每一项各挂成 /host/<同名>:ro。
 # 页面只从 /host 那一层数出有几个目录，就列几卷，所以这里唯一的口径就是把目录名摆正。
+# 清单没写就先探一遍：家用 NAS 的存储池就那么几种摆法，探到的卷全部只读挂进来，主页于是能看见
+# 这台机器上的每一卷。写 HOST_VOLUMES=none 才是「只挂数据目录、别探」。
 EXTRA_MOUNTS=""
+VOL_AUTO=0
+VOL_SKIPPED=""
 
-for host_vol in $HOST_VOLUMES; do
+# 一卷的标志是「跟父目录不在同一个文件系统上」：同一个 st_dev 就是顺手建出来的空目录，不是卷
+is_volume_mount() {
+  local here there
+  here="$(stat -c %d "$1" 2>/dev/null)" || return 1
+  there="$(stat -c %d "$2" 2>/dev/null)" || return 1
+  [ -n "$here" ] && [ -n "$there" ] && [ "$here" != "$there" ]
+}
+
+# 存储池的两种摆法：根目录下直接是池（/vol1 绿联 UGOS、/volume1 群晖），或者池挂在父目录下面（/mnt/*）
+detect_host_volumes() {
+  local found="" dir parent
+  for dir in /vol[0-9] /vol[0-9][0-9] /volume[0-9] /volume[0-9][0-9] /storage[0-9] /data[0-9]; do
+    case "$dir" in *'['* | *'*'*) continue ;; esac
+    [ -d "$dir" ] || continue
+    is_volume_mount "$dir" / || continue
+    found="$found $dir"
+  done
+  for parent in /mnt /media /storage; do
+    [ -d "$parent" ] || continue
+    for dir in "$parent"/*; do
+      case "$dir" in *'['* | *'*'*) continue ;; esac
+      [ -d "$dir" ] || continue
+      is_volume_mount "$dir" "$parent" || continue
+      found="$found $dir"
+    done
+  done
+  printf '%s' "$found" | sed 's/^ *//'
+}
+
+# 一个目录 → 一行只读挂载。自动探到的那些不合适就悄悄跳过（一堆目录不该打断安装），
+# 他写在清单里的则照样报错——那是他明确点的名。
+add_host_volume() {
+  local host_vol="$1" auto="$2" vol_name
 
   case "$host_vol" in
     /*)
       ;;
     *)
+      [ "$auto" = 1 ] && return 0
       die "HOST_VOLUMES 里每一项都得是绝对路径（中间不能带空格）：$host_vol"
       ;;
   esac
@@ -672,17 +715,53 @@ for host_vol in $HOST_VOLUMES; do
 
   # 这个名字会直接写进 compose 的挂载点，也是卡片认卷用的 id，只留字母数字和 . _ -
   case "$vol_name" in
-    '' | *[!A-Za-z0-9._-]*)
+    '' | . | .. | .*)
+      [ "$auto" = 1 ] && { VOL_SKIPPED="$VOL_SKIPPED $vol_name"; return 0; }
+      die "HOST_VOLUMES 里这一项的目录名页面认不了（只能用字母、数字、点、减号、下划线）：$host_vol"
+      ;;
+    *[!A-Za-z0-9._-]*)
+      [ "$auto" = 1 ] && { VOL_SKIPPED="$VOL_SKIPPED $vol_name"; return 0; }
       die "HOST_VOLUMES 里这一项的目录名页面认不了（只能用字母、数字、点、减号、下划线）：$host_vol"
       ;;
   esac
 
+  # 数据目录所在那一卷已经挂在 /app/data 了，再挂一遍只会多出个同名卷
+  case "$DATA_DIR/" in
+    "$host_vol"/*)
+      [ "$auto" = 1 ] && return 0
+      ;;
+  esac
+
   # 目录不存在时 compose 会替你先建一个空目录挂进来，看着就像一卷空的，所以这里提醒一句
-  [ -d "$host_vol" ] || warn "HOST_VOLUMES 里这个目录现在不存在：$host_vol"
+  if [ ! -d "$host_vol" ]; then
+    [ "$auto" = 1 ] && return 0
+    warn "HOST_VOLUMES 里这个目录现在不存在：$host_vol"
+  fi
 
   EXTRA_MOUNTS="${EXTRA_MOUNTS}      - ${host_vol}:/host/${vol_name}:ro
 "
+}
 
+if [ "$HOST_VOLUMES" = "none" ]; then
+  HOST_VOLUMES=""
+else
+  [ -n "$HOST_VOLUMES" ] || { HOST_VOLUMES="$(detect_host_volumes)"; VOL_AUTO=1; }
+fi
+
+# 探到的卷有个数上限：一堆目录全挂进来只会把 compose 撑成读不动的一长串
+if [ "$VOL_AUTO" = 1 ]; then
+  VOL_KEEP=""
+  VOL_N=0
+  for host_vol in $HOST_VOLUMES; do
+    VOL_N=$((VOL_N + 1))
+    [ "$VOL_N" -gt 16 ] && { VOL_SKIPPED="$VOL_SKIPPED $host_vol"; continue; }
+    VOL_KEEP="$VOL_KEEP $host_vol"
+  done
+  HOST_VOLUMES="$(printf '%s' "$VOL_KEEP" | sed 's/^ *//')"
+fi
+
+for host_vol in $HOST_VOLUMES; do
+  add_host_volume "$host_vol" "$VOL_AUTO"
 done
 
 # 容器起来之后服务端就会补写 auth.json，首启提示必须在启动前取样
@@ -706,7 +785,14 @@ log "数据：$DATA_DIR"
 log "时区：$TZ"
 
 if [ -n "$EXTRA_MOUNTS" ]; then
-  log "逐卷用量：另挂 $(printf '%s' "$EXTRA_MOUNTS" | grep -c .) 卷进 /host（只读）"
+  if [ "$VOL_AUTO" = 1 ]; then
+    log "逐卷用量：自动探到并挂进 $(printf '%s' "$EXTRA_MOUNTS" | grep -c .) 卷到 /host（只读）"
+  else
+    log "逐卷用量：按 HOST_VOLUMES 挂进 $(printf '%s' "$EXTRA_MOUNTS" | grep -c .) 卷到 /host（只读）"
+  fi
+  [ -n "$VOL_SKIPPED" ] && log "  跳过不像存储池的目录：$VOL_SKIPPED"
+else
+  [ "$VOL_AUTO" = 1 ] && log "逐卷用量：没探到额外的存储池，主页只列数据目录那一卷"
 fi
 
 if [ "$FIRST_RUN" = 1 ] && [ "$UNINSTALL" != 1 ]; then
@@ -855,7 +941,8 @@ fi
 render_compose() {
 
   printf '# %s，请勿手改：下次部署会整个重写。\n' "$GENERATED_KEY"
-  printf '# 要长期改端口、数据目录或多挂几卷读数，就写在 %s/.env 里的 HOST_PORT / DATA_DIR / HOST_VOLUMES，然后重跑 ./deploy.sh。\n' "$ROOT"
+  printf '# 要长期改端口、数据目录或逐卷读数的清单，就写在 %s/.env 里的 HOST_PORT / DATA_DIR / HOST_VOLUMES，然后重跑 ./deploy.sh。\n' "$ROOT"
+  printf '# HOST_VOLUMES 留空是自动探测这台 NAS 的存储池全挂进来，none 是只挂数据目录；NAS 上加了卷也要重跑一次。\n'
   printf '# 镜像来自 GHCR，本机不需要源码，也不需要 Dockerfile。\n'
   printf '\n'
   printf 'services:\n'
@@ -873,7 +960,7 @@ render_compose() {
     printf '      - %s:%s\n' "$DOCKER_SOCK" "$DOCKER_SOCK"
   fi
 
-  # HOST_VOLUMES 里每一项一行只读挂载，主页的「NAS 资源」据此列出对应的卷
+  # 探到或指定的每一卷各一行只读挂载，主页的读数卡据此列出对应的卷
   if [ -n "$EXTRA_MOUNTS" ]; then
     printf '%s' "$EXTRA_MOUNTS"
   fi

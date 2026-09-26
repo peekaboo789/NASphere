@@ -1,6 +1,6 @@
 {
   "name": "nasphere",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "自托管 NASphere 导航首页：自定义图标、壁纸、多引擎搜索，配置持久化到 NAS",
   "main": "server/index.js",

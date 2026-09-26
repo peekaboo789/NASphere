@@ -688,13 +688,24 @@ html[data-weather="off"] .topbar { display: none; }
 .stat-line { display: flex; align-items: center; gap: 0.45em; white-space: nowrap; }
 .tile-stat b { font-weight: 500; color: var(--text-dim); }
 
-.docker-list { display: grid; gap: 6px; max-height: min(52vh, 420px); overflow: auto; margin: 4px 0 10px; padding-right: 2px; }
+/* 两列一览：容器与 NAS 资源用的是同一套格子，宽屏铺两列、窄屏自动回一列，
+   下面「主页上的组件」那栏对不齐的问题就出在两边各自撑满整行 */
+.docker-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 8px;
+  max-height: min(52vh, 420px);
+  overflow: auto;
+  margin: 4px 0 10px;
+  padding-right: 2px;
+}
 .docker-list.compact { max-height: min(34vh, 260px); }
 .docker-row {
   display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
+  min-height: 40px;
   padding: 9px 11px;
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
@@ -713,7 +724,8 @@ html[data-weather="off"] .topbar { display: none; }
 /* 状态写在容器名后面，宽度先给足，镜像名靠右弹性截断 */
 .docker-state { flex: none; min-width: 4em; color: var(--text-dim); font-size: 0.86em; }
 .docker-image { margin-left: auto; flex: 0 1 auto; min-width: 0; max-width: 45%; color: var(--text-faint); font-size: 0.86em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.docker-mark { flex: none; font-size: 0.84em; color: var(--accent); }
+/* 「＋ 加到主页 / 已在页面上」固定右对齐并给足宽度：两列每一行的这一格都对齐，扫一眼就知道哪行还没加 */
+.docker-mark { flex: none; min-width: 6.5em; text-align: right; font-size: 0.84em; color: var(--accent); }
 /* 已经挂过组件的：压暗一档，右侧标「已在窗口里」，点它是去编辑那张组件而不是再加一张 */
 .docker-row.bound { opacity: 0.62; }
 .docker-row.bound .docker-mark { color: var(--text-faint); }
@@ -1138,7 +1150,7 @@ select.field { max-width: 220px; }
   margin-top: var(--gap-panel);
 }
 
-/* 一张容器组件：图标在左，右边三行——名称 / 状态·镜像 / 实时数字。
+/* 一张容器组件：图标在左，右边三行——名称 / 状态 / 实时数字。
    图标档位（--icon-size）不参与，这里按自己的字号算，所以一张卡不受「小/中/大」影响。
    启停全部在右键菜单里，卡片底下不再常年留一条按钮的位置；挪位置是长按拖，也不用 ◀ ▶。 */
 .dk-tile {
@@ -1182,8 +1194,6 @@ select.field { max-width: 220px; }
 .dk-tile .tile-stat { grid-area: stat; align-self: start; align-items: flex-start; min-width: 0; max-width: 100%; overflow: hidden; font-size: 0.8em; }
 .dk-meta { grid-area: meta; align-self: start; display: flex; align-items: center; gap: 0.4em; min-width: 0; max-width: 100%; font-size: 0.84em; line-height: 1.35; }
 .dk-state { flex: none; font-weight: 600; }
-/* 镜像名等宽小字：跟容器名区分开，也方便一眼比对同一个镜像起的多个容器 */
-.dk-image { min-width: 0; color: var(--text-faint); font-family: ui-monospace, monospace; font-size: 0.92em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dk-tile .stat-line { gap: 0.4em; }
 .dk-tile .stat-line .k { color: var(--text-faint); font-weight: 400; }
 .dk-tile .stat-line .sep { margin-left: 0.9em; }
@@ -1318,8 +1328,32 @@ body.holding-drag .dk-tile.dragging:hover { transform: none; }
 .dk-tile[data-rstate="missing"] .dk-res-pct,
 .dk-tile[data-rstate="loading"] .dk-res-pct { color: var(--text-dim); }
 
-/* 设置里那一行的两个宽高滑块 */
+/* 设置里那一行：名称那一栏给固定的列宽，勾选行和两个滑块各占一整行，
+   容器组件与读数卡两种行用同一套刻度，两列并排时不会一列高一列矮 */
 .dk-row { flex-wrap: wrap; }
+.dk-row strong { flex: 0 0 clamp(88px, 22%, 180px); max-width: none; }
+/* 自定义读数卡勾哪几行：小圆角格子铺满一行，勾上的用强调色描边 */
+.res-pick { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 5px 6px; }
+.res-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+.res-pick-item:hover { border-color: var(--accent-line); color: var(--text); }
+.res-pick-item.on { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
+/* 与「全部卷 / 全部硬盘」重复的那几格按着，勾上会画两遍 */
+.res-pick-item.off { opacity: 0.42; cursor: default; }
+.res-pick-item input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.res-pick-item.off input { cursor: default; }
+.res-pick-tip { align-self: center; color: var(--text-faint); font-size: 12px; }
 .dk-row .size-set {
   flex-basis: 100%;
   display: flex;

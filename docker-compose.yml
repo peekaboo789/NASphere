@@ -16,8 +16,8 @@
 #
 # NAS 拉不动 ghcr 的话，用离线镜像包 docker load 之后再补一个同名的标签：
 #
-#   docker load -i nasphere-1.0.2-linux-amd64.tar.gz
-#   docker tag local/nasphere:1.0.2 ghcr.io/peekaboo789/nasphere:1.0.2
+#   docker load -i nasphere-1.0.3-linux-amd64.tar.gz
+#   docker tag local/nasphere:1.0.3 ghcr.io/peekaboo789/nasphere:1.0.3
 #
 # 默认访问：
 #
@@ -52,7 +52,7 @@ services:
     # 目前是 linux/amd64 单架构；ARM 机型（群晖多数是 arm64/v8）
     # 直接用这条会报 no matching manifest，改走离线包那条。
     #
-    image: ghcr.io/peekaboo789/nasphere:1.0.2
+    image: ghcr.io/peekaboo789/nasphere:1.0.3
 
     # ========================================================
     # 自动重启
@@ -101,9 +101,13 @@ services:
       # ------------------------------------------------------
       # 逐卷用量（可选）
       #
-      # 「NAS 资源」读数卡默认只看得见 /app/data 这一卷
-      # （页面上叫「数据盘」）。想让主页单独列出宿主机上的
-      # 某个卷，就把那一卷挂进容器里的 /host 下面：
+      # 走 deploy.sh 的话这一节不用管：它每次部署都探一遍这台
+      # NAS 的存储池，探到的每一卷自动写一行只读挂载进它生成的
+      # compose。不想让它探，就在 .env 里写 HOST_VOLUMES=none。
+      #
+      # 手写这份 compose 才需要自己加行。容器默认只看得见
+      # /app/data 这一卷（页面上叫「数据盘」），想让主页列出
+      # 宿主机上的某一卷，就把那一卷挂进 /host 下面：
       #
       #   - /volume2:/host/volume2:ro
       #
@@ -113,9 +117,10 @@ services:
       #
       # ⚠️ 边界说清楚：只读挂载挡的是写，不是读。挂进来的
       # 那一卷，容器进程技术上就能读它的内容了，哪怕页面
-      # 只显示容量数字。不需要逐卷用量就别加这一行。
+      # 只显示数字。不需要逐卷用量就别加这一行。
       # ------------------------------------------------------
       # - /volume1:/host/volume1:ro
+      # - /volume2:/host/volume2:ro
       # - /volume2:/host/volume2:ro
 
     # ========================================================

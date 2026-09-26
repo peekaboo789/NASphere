@@ -64,8 +64,12 @@
 * **NAS 资源组件**
 
   * 内存使用率
+  * CPU 占用与负载
+  * 上 / 下行速率
+  * 显卡占用
   * 每个存储卷各自的容量与使用率
   * 物理硬盘型号与容量
+  * 自定义读数：勾哪几行就画哪几行
   * 只读数字，不读文件内容
 * **数据完全本地化**
 
@@ -119,7 +123,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.0.2
+镜像：ghcr.io/peekaboo789/nasphere:1.0.3
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -190,7 +194,7 @@ chmod +x deploy.sh
 ./deploy.sh --tag 1.1.0
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.2`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.3`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -251,7 +255,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.2`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.3`，拉下来直接起容器。
 
 默认访问：
 
@@ -284,8 +288,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.0.2-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.2 ghcr.io/peekaboo789/nasphere:1.0.2
+docker load -i nasphere-1.0.3-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.3 ghcr.io/peekaboo789/nasphere:1.0.3
 docker compose up -d
 ```
 
@@ -297,10 +301,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.2 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.3 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.0.2
+docker pull ghcr.io/peekaboo789/nasphere:1.0.3
 ```
 
 然后：
@@ -314,7 +318,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.2
+  ghcr.io/peekaboo789/nasphere:1.0.3
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -335,7 +339,7 @@ NAS 宿主机 18086 → NASphere 容器 18086
 
 数据卷那一位同理：镜像里 `ENV DATA_DIR=/app/data`，宿主机目录挂到 `/app/data` 才会被读到。
 
-想让主页单独列出某一卷的用量，再加一行只读挂载就行（口径见下面 📊 NAS 资源组件）：
+主页要逐卷列出用量时，`deploy.sh` 会自己探这台 NAS 的存储池、给每一卷写一行只读挂载；手工 `docker run` 就自己加一行（口径见下面 📊 NAS 资源组件）：
 
 ```text
 -v /volume2:/host/volume2:ro
@@ -363,7 +367,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.0.2-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.0.3-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -621,12 +625,13 @@ docker inspect
 
 # 📊 NAS 资源组件
 
-主页还可以摆 NAS 自己的读数卡，共三种：
+主页还可以摆 NAS 自己的读数卡，共四种：
 
 ```text
 NAS 总览
 内存
 单个存储空间
+自定义读数
 ```
 
 在：
@@ -635,17 +640,22 @@ NAS 总览
 设置 → 应用矩阵 → NAS 资源
 ```
 
-里点一下就往主页上加一张，摆放、叠放、宽高和容器组件完全是同一套操作。
+里点一下就往主页上加一张，摆放、叠放、宽高和容器组件完全是同一套操作。「自定义读数」能加好几张，
+勾哪几行就画哪几行，新加的默认给内存 / CPU / 网络三行。
 
 显示：
 
 ```text
 内存：已用 / 总量 / 百分比
+CPU：占用百分比 + 核心数 + 1 分钟负载
+网络：下行 / 上行速率
+GPU：占用百分比（驱动没写这一项就直说读不到）
 存储空间：已用 / 总量 / 百分比
 物理盘：型号 + 容量
 ```
 
-默认每 5 秒刷新一次，切到后台的标签页不刷。
+默认每 5 秒刷新一次，切到后台的标签页不刷。CPU 占用和网络速率都是拿累计计数作差算出来的，
+所以服务起来之后的第一轮写着「刚开始采样」，第二轮才有数字。
 
 用量条在两档变色：
 
@@ -654,35 +664,54 @@ NAS 总览
 90%  红
 ```
 
-## 只报容量，不读内容
+## 只报数字，不读内容
 
-服务端取数只有三个来源：
+服务端取数只有这几个来源：
 
 ```text
 /proc/meminfo   → 内存两个计数
+/proc/stat      → CPU 的累计 ticks
+/proc/loadavg   → 1 / 5 / 15 分钟负载
+/proc/net/dev   → 每块网卡的收发字节
+/sys/class/drm  → 显卡占用那一个百分比
 /sys/block      → 盘的设备名、型号、总容量
 statfs()        → 某个目录所在文件系统的块数
 ```
 
-这三个来源里没有文件内容可对，接口返回的字段也全是数字与型号，页面不会列出一个文件名。
+回环、`docker0` 和一对端的 `veth` 不计入网络流量，`loop` / `ram` / `zram` / `md` 这类包出来的设备也不报成硬盘。
+这些来源给的都是计数器，接口返回的字段全是数字与型号，页面不会列出一个文件名，也没有挂载点路径。
 
 ## 卷怎么列出来
 
-容器里能看见的目录才会成为候选卷，默认只有一个：
+`deploy.sh` 每次部署都探一遍这台 NAS 上的存储池（`/vol1`、`/volume1`、`/storage1`、`/mnt/*` 这几种摆法），
+探到的每一卷自动写一行只读挂载进它生成的 compose：
 
 ```text
-/app/data   → 显示为「数据盘」
+/volume1:/host/volume1:ro
 ```
 
-想让页面单独列出宿主机上的某一卷，就在 compose 里给那一卷补一行只读挂载：
+于是主页看得见这台机器上的每一卷，卡片认的名字就是 `/host` 下面那一层的目录名。同一块文件系统只报一次：
+数据目录正躺在某一卷里面时，列出来的是那一卷的名字，不再另出一张「数据盘」。
+
+不想让它自动探，就在 `.env` 里点名单：
 
 ```text
-/volume2:/host/volume2:ro
+HOST_VOLUMES=/volume1 /volume2
 ```
 
-`/host` 下面多一个目录，「NAS 资源」那一栏就多一条，点它加一张卡；同一个文件系统被挂了两处只会报一次。删掉这一行，那张卡自己变成「查不到这个卷」，配置不用动。
+只要数据目录那一卷、别的都别挂进来：
 
-⚠️ 注意边界：挂载点一旦给进容器，容器进程技术上就能读那一卷的文件内容，哪怕页面只显示数字。所以按需挂，不需要逐卷用量就别加这一行。
+```text
+HOST_VOLUMES=none
+```
+
+NAS 上新增或删除卷之后要重跑一次 `./deploy.sh`，「NAS 资源」那一列才会跟着多一行或少一行。
+手工 compose 路线自己加那一行 `:ro` 挂载就行。
+
+卡片上点名的那一卷要是没挂进来，卡片会整张压暗并写着「查不到这个卷」，配置不用动。
+
+⚠️ 注意边界：挂载点一旦给进容器，容器进程技术上就能读那一卷的文件内容，哪怕页面只显示数字。
+逐卷用量换的是这个代价，不接受就写 `HOST_VOLUMES=none`。
 
 ---
 
@@ -967,13 +996,36 @@ http://
         "h": 240,
         "x": 10,
         "y": 200
+      },
+      {
+        "title": "自定义读数",
+        "res": "custom",
+        "rows": [
+          "mem",
+          "cpu",
+          "net",
+          "vol:volume2"
+        ],
+        "w": 300,
+        "h": 156,
+        "x": 350,
+        "y": 200
       }
     ]
   }
 }
 ```
 
-带 `container` 的是容器组件，带 `res` 的是读数卡（`mem` / `vol` / `overview`），两者都没有的就是废条目，读取时直接丢掉。`vol` 写的是 `/host` 下的目录名，也就是「NAS 资源」那一栏里列出来的名字。
+带 `container` 的是容器组件，带 `res` 的是读数卡（`mem` / `vol` / `overview` / `custom`），两者都没有的就是废条目，读取时直接丢掉。`vol` 写的是 `/host` 下的目录名，也就是「NAS 资源」那一栏里列出来的名字。
+
+`custom` 那张的 `rows` 就是勾了哪几行，按勾的顺序从上往下画：
+
+```text
+mem      cpu      net      gpu      vols      disks
+vol:<卷名>        disk:<盘名>
+```
+
+`vols` / `disks` 是「每个卷一行」「每块盘一行」，跟点名的 `vol:` / `disk:` 同时勾会把那一卷画两遍，所以设置里的勾选框会把冲突的那格先按住。认不得的键、重复的键都会在保存时丢掉；一行都没勾，卡上就写着「还没勾选要显示哪一行」。
 
 ---
 
@@ -1008,6 +1060,7 @@ Docker 组件：
 高度：64–600px
 X：0–4000
 Y：0–4000
+自定义读数的行：40
 ```
 
 非法网址协议，例如：
@@ -1250,11 +1303,11 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.0.2`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.0.3`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
-| `HOST_VOLUMES`  | 空                           | 空格分隔的宿主机目录，每个各挂成 `/host/<同名>:ro`，主页就多列出那几卷的用量 |
+| `HOST_VOLUMES`  | 空（自动探）                 | 留空时 `deploy.sh` 自动探这台 NAS 的存储池，每一卷各挂成 `/host/<同名>:ro`；写空格分隔的目录就是点名单，`none` 是只挂数据目录、别探 |
 | `COMPOSE_PROJECT` | `nasphere`                | compose 项目名，容器叫 `<项目名>-nasphere-1` |
 | `HEALTH_WAIT`   | `40`                       | 健康检查等待秒数      |
 | `KEEP_BACKUPS`  | `5`                        | `data/.deploy-backup/` 保留几份 |
@@ -1503,6 +1556,39 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.0.3
+
+新增：读数卡多了三种读数，并且可以自己挑要哪几行。
+
+```text
+CPU　　→ 占用百分比 + 核心数 + 1 分钟负载
+网络　　→ 下行 / 上行速率
+GPU　　 → 占用百分比（驱动没写这一项就直说读不到）
+```
+
+原来那三种是固定内容，现在多一张「自定义读数」：勾哪几行就画哪几行，内存 / CPU / 网络 / GPU / 每个卷 / 每块盘随便组合，想摆几张摆几张。
+
+```text
+NAS 总览　　　→ 内存 + 每个卷 + 每块物理盘
+内存　　　　　→ 单独一张内存用量卡
+单个存储空间　→ 一个卷一张卡
+自定义读数　　→ 自己勾出来的行
+```
+
+卷也不再只有数据盘那一卷：`deploy.sh` 每次部署自动探这台 NAS 的存储池，探到的每一卷各写一行只读挂载，主页因此能列出全部卷和硬盘。
+
+```text
+HOST_VOLUMES 留空　　→ 自动探测（默认）
+HOST_VOLUMES 写目录　→ 只挂点名的那几卷
+HOST_VOLUMES=none　　→ 只挂数据目录，不探测
+```
+
+NAS 上新增或删除卷之后，重跑一次 `./deploy.sh` 就会跟着更新。边界照旧：页面只报容量数字，接口里没有挂载点路径也没有文件名；但卷挂进容器之后，容器进程技术上就能读那一卷的内容，不接受这个代价就写 `none`。
+
+改动：主页的容器卡片不再显示运行状态后面那行镜像名小字；「应用矩阵」那一栏改成按宽度自动排的网格。
+
+详见「📊 NAS 资源组件」。
 
 ## v1.0.2
 

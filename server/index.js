@@ -34,6 +34,7 @@ const LIM = {
   groups: 120,
   linksPerGroup: 300,
   dockerItems: 60,
+  resRows: 40,
   engines: 40,
   todos: 300,
 };
@@ -244,11 +245,16 @@ const withDkBox = (out, from, cur) => {
   return out;
 };
 
-// 资源组件的三种：内存 / 单个卷 / 整台 NAS 总览。跟容器组件同住 docker.items，靠 res 区分。
-const DK_RES = new Set(['mem', 'vol', 'overview']);
-const RES_TITLE = { mem: '内存', overview: 'NAS 总览' };
-// 卷 id 只跟服务端读数里的 id 精确比对，从不拼成路径；斜杠和打头的点照样挡在门外，读代码的人不用去找第二道保险
-const VOL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$/;
+// 资源组件的四种：内存 / 单个卷 / 整台 NAS 总览是三种固定卡，custom 那一张画哪几行由 rows 说了算。
+// 跟容器组件同住 docker.items，靠 res 区分。
+const DK_RES = new Set(['mem', 'vol', 'overview', 'custom']);
+const RES_TITLE = { mem: '内存', overview: 'NAS 总览', custom: '自定义读数' };
+// 卷 id 和盘名共用这一份字符集：只跟服务端读数里的名字精确比对，从不拼成路径；斜杠和打头的点照样挡在门外，读代码的人不用去找第二道保险
+const ID_SRC = '[A-Za-z0-9][A-Za-z0-9_.-]{0,59}';
+const VOL_ID_RE = new RegExp(`^${ID_SRC}$`);
+// 勾选行的词汇表：四个整机指标、每卷一行 / 每盘一行两档，再加上点名的某一卷、某一块盘。
+// 拼进分支里的片段必须不带锚：^…$ 落在 alternation 中间就等于永远匹配不上
+const RES_ROW_RE = new RegExp(`^(?:mem|cpu|net|gpu|vols|disks|vol:${ID_SRC}|disk:${ID_SRC})$`);
 
 // 只写一个容器名的简写也算一条：{ items: ['nginx'] }
 const normDockerItem = (l, used, cur) => {
@@ -260,6 +266,18 @@ const normDockerItem = (l, used, cur) => {
     const want = txt(pick(o, ['vol', 'volume', 'volId']), LIM.name);
     // 只有卷卡需要知道是哪一卷
     if (res === 'vol' && VOL_ID_RE.test(want)) out.vol = want;
+    if (res === 'custom') {
+      const seen = new Set();
+      const rows = [];
+      for (const raw of Array.isArray(o.rows) ? o.rows.slice(0, LIM.resRows) : []) {
+        const key = String(raw);
+        if (!RES_ROW_RE.test(key) || seen.has(key)) continue;
+        seen.add(key);
+        rows.push(key);
+      }
+      // 一行都没勾就干脆不写这个键：前端画一句提示，配置里少一个空数组
+      if (rows.length) out.rows = rows;
+    }
     if (!txt(pick(o, ['title', 'name', 'label', 'text']), LIM.text)) out.title = RES_TITLE[res] || out.vol || '未命名';
   }
   return withDkBox(out, o, cur);
@@ -924,13 +942,16 @@ function dockerAct(name, action) {
   });
 }
 
-/* ---------- NAS 资源读数：内存 / 每个卷的用量 / 物理盘型号 ----------
-   边界只有一条：只取容量的数字，不读任何文件内容。
+/* ---------- NAS 资源读数：内存 / CPU / 网络 / 核显 / 每个卷的用量 / 物理盘型号 ----------
+   边界只有一条：只取计数器一样的数字，不读任何文件内容。
      · 内存取 /proc/meminfo 的两个计数，读不到就用 os 模块给的同一份统计
+     · CPU / 负载取 /proc/stat 第一行与 /proc/loadavg，都是累计计数，跟上一次采样作差
+     · 网络取 /proc/net/dev 的收发字节，同样作差成速率；回环和 Docker 自己的网桥不算
+     · 核显只读 /sys/class/drm 下每张 card 的 device/gpu_busy_percent，驱动不写这一项就如实报读不到
      · 物理盘取 /sys/block 的目录名、size 与 device/model，那里只有型号和大小，从来不是路径
      · 每个卷只对目录本身调一次 statfs：那是整个文件系统的账，返回里不会出现一个文件名
    候选卷 = 数据目录 + 挂进来的 /host 第一层目录。宿主机没挂进来的目录在容器里本来就不存在，
-   所以他在 compose 里补一行只读挂载，页面自己就多出一张卷卡片，这里不需要配开关。 */
+   所以 deploy.sh 每探到一卷就往 compose 里写一行只读挂载，页面自己就多出一张卷卡片，这里不需要配开关。 */
 
 // 自测用的前缀：把一份假的 proc / sys / host 目录树指过来，在没有 Linux 的开发机上也能跑通这套解析
 const SYS_ROOT = path.resolve(process.env.NAV_SYS_ROOT || '/');
@@ -975,6 +996,136 @@ function readMemory() {
   const avail = kbOf('MemAvailable');
   if (!(total > 0) || !(avail >= 0)) return memFromOs();
   return { total, used: Math.max(0, total - avail), avail };
+}
+
+/* CPU 占用与网卡速率都是「这一段用了多少」，可 /proc 给的是开机以来的累计值，
+   所以各留一份上一次的采样作差。第一轮没有上一次，那一项就是 null，页面画成「—」，
+   5 秒后第二轮自然有真数——凑一个假数比留白更糟。 */
+
+// /proc/stat 第一行的字段：user nice system idle iowait irq softirq steal guest guest_nice。
+// guest 那两个已经算进 user / nice，再取一次就重复计数了，所以只认前八个。
+const CPU_FIELDS = 8;
+
+function cpuSample() {
+  try {
+    const line = fs.readFileSync(sysPath('proc', 'stat'), 'utf8').split('\n', 1)[0].trim();
+    if (/^cpu\s/.test(line)) {
+      const f = line.split(/\s+/).slice(1, CPU_FIELDS + 1).map(Number);
+      if (f.length === CPU_FIELDS && f.every(Number.isFinite)) {
+        return { total: f.reduce((a, b) => a + b, 0), idle: f[3] + f[4] };
+      }
+    }
+  } catch {
+    // 没有 /proc 的开发机走下面 os 模块那份，同一套作差逻辑
+  }
+  const list = os.cpus();
+  if (!list.length) return null;
+  let total = 0;
+  let idle = 0;
+  for (const c of list) {
+    const t = c && c.times;
+    if (!t) return null;
+    total += t.user + t.nice + t.sys + t.idle + t.irq;
+    idle += t.idle;
+  }
+  return { total, idle };
+}
+
+// 平均负载只有 /proc/loadavg 有；Windows 上 os.loadavg() 恒为 0，那是假数，不如报读不到
+function readLoadAvg() {
+  const f = readSysText(path.join('proc', 'loadavg')).split(/\s+/).slice(0, 3).map(Number);
+  return f.length === 3 && f.every(Number.isFinite) ? f : null;
+}
+
+let cpuPrev = null;
+
+function readCpu() {
+  const cur = cpuSample();
+  let used = null;
+  let warming = false;
+  if (cur) {
+    const prev = cpuPrev;
+    cpuPrev = cur;
+    warming = !prev;
+    const dTotal = prev ? cur.total - prev.total : 0;
+    const dIdle = prev ? cur.idle - prev.idle : 0;
+    // 重启后计数归零，差值会是负的：这种时候宁可空着
+    if (dTotal > 0 && dIdle >= 0) used = Math.min(100, Math.max(0, Math.round((1 - dIdle / dTotal) * 1000) / 10));
+  }
+  // warming 分两种空：页面刚起来、还没作差完（下一轮就有数），和这台机器真给不出占用
+  return { cores: os.cpus().length || 0, used, warming, load: readLoadAvg() };
+}
+
+// 回环、Docker 自己的网桥和一对端的 veth 都不算进出机器的流量，算进去数字会翻倍
+const NET_SKIP = /^(?:lo|veth|docker|br-|virbr|tap|dummy)/;
+
+function netSample() {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(sysPath('proc', 'net', 'dev'), 'utf8');
+  } catch {
+    return null;
+  }
+  let rx = 0;
+  let tx = 0;
+  let seen = false;
+  for (const line of raw.split('\n')) {
+    const i = line.indexOf(':');
+    if (i < 0) continue;
+    const name = line.slice(0, i).trim();
+    if (!name || NET_SKIP.test(name)) continue;
+    // 收发字节分别是第 1 列和第 9 列，两份表头之外每行的列数固定
+    const f = line.slice(i + 1).trim().split(/\s+/).map(Number);
+    if (f.length < 16 || !Number.isFinite(f[0]) || !Number.isFinite(f[8])) continue;
+    rx += f[0];
+    tx += f[8];
+    seen = true;
+  }
+  return seen ? { at: Date.now(), rx, tx } : null;
+}
+
+let netPrevSys = null;
+
+function readNet() {
+  const cur = netSample();
+  let down = null;
+  let up = null;
+  let warming = false;
+  if (cur) {
+    const prev = netPrevSys;
+    netPrevSys = cur;
+    warming = !prev;
+    if (prev && cur.at > prev.at) {
+      const secs = (cur.at - prev.at) / 1000;
+      const dRx = cur.rx - prev.rx;
+      const dTx = cur.tx - prev.tx;
+      // 计数回绕（重启或换网卡）时那一路给 null，别把负的塞进格式化函数
+      if (dRx >= 0) down = dRx / secs;
+      if (dTx >= 0) up = dTx / secs;
+    }
+  }
+  return { down, up, warming };
+}
+
+// 核显 / 独显都认这一个文件：只有 intel_gt 与 amdgpu 那几类驱动会写，读不到就是读不到
+function readGpu() {
+  let cards;
+  try {
+    cards = fs
+      .readdirSync(sysPath('sys', 'class', 'drm'))
+      .filter((n) => /^card\d+$/.test(n))
+      .sort();
+  } catch {
+    return { used: null };
+  }
+  for (const n of cards) {
+    const raw = readSysText(path.join('sys', 'class', 'drm', n, 'device', 'gpu_busy_percent'));
+    // 空串得先拦下来：Number('') 是 0，那样没写这一项的驱动会被报成「占用 0%」，比报读不到更糟
+    if (!raw) continue;
+    const v = Number(raw);
+    if (Number.isFinite(v) && v >= 0) return { used: Math.min(100, v) };
+  }
+  return { used: null };
 }
 
 function readDisks() {
@@ -1022,14 +1173,21 @@ function readVolume(id, name, dir) {
 }
 
 function readVolumes() {
-  const candidates = [{ id: 'data', name: '数据盘', dir: DATA_DIR }];
+  // 挂进来的存储池排在前面：数据目录十有八九就躺在某一卷里面，同一块文件系统该留池子的名字，
+  // 而不是留「数据盘」这个只对这台容器有意义的叫法
+  const candidates = [];
   try {
-    for (const name of fs.readdirSync(sysPath('host')).sort()) {
+    for (const name of fs
+      .readdirSync(sysPath('host'))
+      // 认不出这个名字的目录就当没看见：卡片按 id 认卷，隐藏目录和带怪字符的名字进不了配置
+      .filter((n) => VOL_ID_RE.test(n))
+      .sort()) {
       candidates.push({ id: name, name, dir: sysPath('host', name) });
     }
   } catch {
     // 没挂 /host 就只剩数据目录，这本来的默认样子
   }
+  candidates.push({ id: 'data', name: '数据盘', dir: DATA_DIR });
   const seen = new Set();
   const out = [];
   for (const c of candidates) {
@@ -1053,6 +1211,9 @@ function systemState() {
     error: '',
     at: Date.now(),
     memory: readMemory(),
+    cpu: readCpu(),
+    net: readNet(),
+    gpu: readGpu(),
     volumes: readVolumes(),
     disks: readDisks(),
   }));

@@ -137,30 +137,130 @@ const Docker = {
     if (net) net.textContent = this.value(info, 'net');
     const label = node.querySelector('[data-state-text]');
     if (label) label.textContent = this.stateText(info);
-    const img = node.querySelector('[data-image]');
-    // 镜像名只有真查到的容器才有；查不到就把这一格收掉，别留个空竖线
-    if (img) {
-      img.hidden = !(info && info.image);
-      if (info && info.image) img.textContent = info.image;
-    }
   },
 };
 
-/* ---------- NAS 资源读数：内存、每个卷的容量、物理盘型号。5 秒一轮，只在页面上真有资源组件时才跑 ---------- */
+/* ---------- NAS 资源读数：内存 / CPU / 网络 / 核显 / 每个卷的容量 / 物理盘型号。5 秒一轮，只在页面上真有资源组件时才跑 ---------- */
 
-// 单指标卡跟容器组件同尺寸；总览卡的出厂高度按当时读到的行数算（见 useResRow），这里只给下限
-const RES_DEF = { mem: { w: 250, h: 118 }, vol: { w: 250, h: 118 }, overview: { w: 320, h: 208 } };
+// 单指标卡跟容器组件同尺寸；多行卡（总览 / 自定义）的出厂高度按当时读到的行数算，见 resFitH
+const RES_DEF = { mem: { w: 250, h: 118 }, vol: { w: 250, h: 118 }, overview: { w: 320, h: 208 }, custom: { w: 300, h: 118 } };
 const RES_POLL_MS = 5000;
 // 用量条的告警档：接近满先琥珀、再满转红，跟容器状态那套颜色同一刻度
 const RES_WARN = 80;
 const RES_FULL = 90;
-const RES_NAME = { mem: '内存', vol: '存储空间', overview: 'NAS 总览' };
+const RES_NAME = { mem: '内存', vol: '存储空间', overview: 'NAS 总览', custom: '自定义读数' };
+// 多行卡的一行占多高、上下留多少：出厂高度按这两个数算，别让最后几行被裁掉
+const RES_ROW_H = 28;
+const RES_HEAD_H = 44;
+// 新建自定义卡先给最常见的三行，勾掉的加了都在下面那栏里改
+const RES_CUSTOM_DEFAULT = ['mem', 'cpu', 'net'];
 
-// 读数卡没有站点图标可取，图形固定在这三枚白色描边 SVG 里（跟顶栏那两个同一画风）
+// 勾选行的词汇：四个整机指标 + 「每卷一行」「每盘一行」两档，再加上按 id 点名的某一卷、某一块盘。
+// 键的形状跟服务端 sanitize 里那条正则一一对应，这里只画服务端读到的东西
+const RES_METRICS = [
+  { key: 'mem', label: '内存' },
+  { key: 'cpu', label: 'CPU' },
+  { key: 'net', label: '网络' },
+  { key: 'gpu', label: 'GPU' },
+  { key: 'vols', label: '全部卷' },
+  { key: 'disks', label: '全部硬盘' },
+];
+
+// 一个行键的人话名字：勾选框的标签和上面那栏都用它
+function resMetricLabel(key) {
+  const hit = RES_METRICS.find((m) => m.key === key);
+  if (hit) return hit.label;
+  if (key.startsWith('vol:')) return '只这一卷 · ' + (key.slice(4) || '？');
+  if (key.startsWith('disk:')) return '只这一块 · ' + (key.slice(5) || '？');
+  return key;
+}
+
+// 固定那三张就是三个写死的组合，自定义卡读配置里勾选的 rows：画行的代码只有一套
+function resKeysOf(item) {
+  if (item.res === 'custom') return Array.isArray(item.rows) ? item.rows : [];
+  if (item.res === 'vol') return ['vol:' + (item.vol || '')];
+  if (item.res === 'overview') return ['mem', 'cpu', 'net', 'gpu', 'vols', 'disks'];
+  return ['mem'];
+}
+
+// 一行只有一个指标时，名字已经在卡片标题上了；自定义卡的标题不说明内容，所以永远带名字
+function resLabelled(item) {
+  return item.res === 'custom' || resKeysOf(item).length > 1;
+}
+
+// 出厂高度：行数 × 一行的高度，夹在滑块那两档之间
+function resFitH(rows, base) {
+  return Math.min(DK_TILE.maxH, Math.max(base, rows * RES_ROW_H + RES_HEAD_H));
+}
+
+// 勾选行那排格子的名单签名：只有卷 / 盘的名单真的变了才值得重铺一次
+function resPickSignature() {
+  const d = Res.data;
+  if (!d) return 'loading';
+  return (d.volumes || []).map((v) => v.id).join(',') + '|' + (d.disks || []).map((x) => x.name).join(',');
+}
+
+const resHas = (v) => Number.isFinite(v);
+
+// 一个键 → 这一张卡上的几行。有百分数的行给容量条，没有的（速率、盘容量）只给一行字
+function resRowOf(key, d, compact) {
+  const usage = (total, used) =>
+    total > 0
+      ? {
+          pct: Math.min(100, Math.max(0, (used / total) * 100)),
+          note: compact ? `${fmtBytes(used)} / ${fmtBytes(total)}` : `已用 ${fmtBytes(used)} · 共 ${fmtBytes(total)}`,
+        }
+      : { note: '读不到用量' };
+  if (key === 'mem') {
+    const m = d.memory;
+    return [{ k: '内存', ...(m ? usage(m.total, m.used) : { note: '读不到内存' }) }];
+  }
+  if (key === 'cpu') {
+    const c = d.cpu || {};
+    const bits = [];
+    if (c.cores > 0) bits.push(`${c.cores} 核`);
+    if (resHas(c.load && c.load[0])) bits.push(`${compact ? '负载' : '1 分钟负载'} ${c.load[0].toFixed(2)}`);
+    const extra = bits.join(' · ');
+    // 第一轮还没有可作差的上一次采样，那一句「刚开始采样」跟真的读不到是两回事
+    if (!resHas(c.used)) return [{ k: 'CPU', note: (c.warming ? '刚开始采样' : '占用读不到') + (extra ? ' · ' + extra : '') }];
+    return [{ k: 'CPU', pct: c.used, note: extra }];
+  }
+  if (key === 'net') {
+    const n = d.net || {};
+    if (!resHas(n.down) && !resHas(n.up)) return [{ k: '网络', note: n.warming ? '刚开始采样' : '读不到网络流量' }];
+    return [{ k: '网络', note: compact ? `↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)}` : `下行 ${fmtRate(n.down)} · 上行 ${fmtRate(n.up)}` }];
+  }
+  if (key === 'gpu') {
+    const g = d.gpu || {};
+    // 核显那项只有部分驱动写，读不到就直说，不拿 CPU 的数字冒充
+    if (!resHas(g.used)) return [{ k: 'GPU', note: '读不到 GPU 占用（这台机器的驱动没写这一项）' }];
+    return [{ k: 'GPU', pct: g.used, note: compact ? '' : '显卡占用' }];
+  }
+  if (key === 'vols' || key === 'disks') {
+    const list = (key === 'vols' ? d.volumes : d.disks) || [];
+    if (!list.length) return [{ k: key === 'vols' ? '存储卷' : '硬盘', note: '读不到' }];
+    return key === 'vols'
+      ? list.map((v) => ({ k: v.name, ...usage(v.total, v.used) }))
+      : list.map((x) => ({ k: x.model || x.name, note: fmtBytes(x.size) }));
+  }
+  const id = key.slice(key.indexOf(':') + 1);
+  if (key.startsWith('vol:')) {
+    const v = ((d.volumes || []).find((x) => x.id === id)) || null;
+    return [v ? { k: v.name, ...usage(v.total, v.used) } : { k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
+  }
+  if (key.startsWith('disk:')) {
+    const x = ((d.disks || []).find((y) => y.name === id)) || null;
+    return [x ? { k: x.model || x.name, note: fmtBytes(x.size) } : { k: id || '没选硬盘', note: '查不到这块硬盘' }];
+  }
+  return [{ k: key, note: '不认识的行' }];
+}
+
+// 读数卡没有站点图标可取，图形固定在这四枚白色描边 SVG 里（跟顶栏那两个同一画风）
 const RES_ICON = {
   mem: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.6" y="6.4" width="18.8" height="9.6" rx="1.6"></rect><path d="M6.4 16v3.4M12 16v3.4M17.6 16v3.4M6.8 9.8h3.2M14 9.8h3.2M6.8 12.8h3.2M14 12.8h3.2"></path></svg>',
   vol: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.6" y="5.2" width="18.8" height="13.6" rx="2"></rect><path d="M2.6 12h18.8"></path><circle cx="6.6" cy="15.6" r="1.1"></circle><path d="M10.4 15.6h7.4M6.6 8.4h7.4"></path></svg>',
   overview: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.4 20.8 8 12 12.6 3.2 8z"></path><path d="M3.2 12.6 12 17.2l8.8-4.6M3.2 16.8 12 21.4l8.8-4.6"></path></svg>',
+  custom: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.4 8h9.4M17 8h3.6M3.4 16h3.6M11.2 16h9.4"></path><circle cx="15" cy="8" r="2.1"></circle><circle cx="9.2" cy="16" r="2.1"></circle></svg>',
 };
 
 const Res = {
@@ -176,6 +276,13 @@ const Res = {
 
   volume(id) {
     return ((this.data && this.data.volumes) || []).find((v) => v.id === id) || null;
+  },
+
+  // 卡上点名的那一卷已经不在这份读数里（没挂进容器、或者卷被卸了）：整张压暗一档。
+  // 「每个卷」那一档跟着卷的数目自己伸缩，不存在点错的问题
+  missing(item) {
+    if (!this.data) return false;
+    return resKeysOf(item).some((k) => k.startsWith('vol:') && !this.volume(k.slice(4)));
   },
 
   problem() {
@@ -241,6 +348,8 @@ const Res = {
 const App = {
   bound: false,
   bingToken: 0,
+  // 卷 / 盘名单的上一份签名：只有它变了才重铺设置里那排勾选格子
+  resPickSig: '',
   // 当前这台设备走内网还是外网，只记在浏览器本地：同一账号在家/在外的设备互不影响
   netMode: Prefs.get('netMode', 'lan') === 'wan' ? 'wan' : 'lan',
 
@@ -554,42 +663,22 @@ const App = {
     return box;
   },
 
-  // 一张资源卡要画哪几行：内存、每个卷、每块物理盘。盘只有型号和大小，用量根本量不到，所以不给条
+  // 一张资源卡要画哪几行：把配置里的行键逐个换成读数，'vols' / 'disks' 会展开成好几行
   resRows(item) {
     const d = Res.data;
     if (!d) return [{ k: RES_NAME[item.res], note: Res.problem() }];
-    // 总览卡一行要装「名称 + 数字 + 百分比 + 条」，数字写成 3.1 GB / 16 GB 才塞得进；单指标卡没名字要认，用整句
-    const usage = (total, used, compact) =>
-      total > 0
-        ? {
-            pct: Math.min(100, Math.max(0, (used / total) * 100)),
-            note: compact
-              ? `${fmtBytes(used)} / ${fmtBytes(total)}`
-              : `已用 ${fmtBytes(used)} · 共 ${fmtBytes(total)}`,
-          }
-        : { note: '读不到用量' };
+    const keys = resKeysOf(item);
+    const labelled = resLabelled(item);
     const rows = [];
-    if (item.res === 'mem') {
-      const m = d.memory;
-      rows.push(m ? usage(m.total, m.used) : { note: '读不到内存' });
-    }
-    if (item.res === 'vol') {
-      const v = Res.volume(item.vol);
-      rows.push(v ? { k: v.name, ...usage(v.total, v.used) } : { k: item.vol || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' });
-    }
-    if (item.res === 'overview') {
-      const m = d.memory;
-      rows.push(m ? { k: '内存', ...usage(m.total, m.used, true) } : { k: '内存', note: '读不到内存' });
-      for (const v of d.volumes || []) rows.push({ k: v.name, ...usage(v.total, v.used, true) });
-      for (const disk of d.disks || []) rows.push({ k: disk.model || disk.name, note: fmtBytes(disk.size) });
-    }
+    for (const key of keys) rows.push(...resRowOf(key, d, labelled));
+    if (!rows.length) rows.push({ k: '', note: '还没勾选要显示哪一行' });
     return rows;
   },
 
   /* 一轮刷数只换这几行文字和条的宽度，整张卡不重建：重建会把长按拖拽和悬停都打断。 */
   fillResRows(box, item) {
     box.innerHTML = '';
-    const labelled = item.res === 'overview';
+    const labelled = resLabelled(item);
     for (const r of this.resRows(item)) {
       const pct = Number.isFinite(r.pct) ? r.pct : null;
       const row = document.createElement('span');
@@ -634,10 +723,15 @@ const App = {
   // 一行话把这张卡读到的数字讲完，主页上点卡的提示和设置里的行都用它
   resReadout(item) {
     const rows = this.resRows(item);
-    const live = rows.filter((r) => Number.isFinite(r.pct));
-    if (!live.length) return rows[0].note;
-    if (live.length === 1) return `${fmtPct(live[0].pct)} · ${live[0].note}`;
-    return live.map((r) => `${r.k} ${fmtPct(r.pct)}`).join(' · ');
+    const named = resLabelled(item);
+    const parts = rows.map((r) => {
+      const hasPct = Number.isFinite(r.pct);
+      const head = named && r.k ? r.k + ' ' : '';
+      // 单指标卡没有名称要认，那句「已用多少 / 共多少」才有地方读；多行卡只报百分比，整句在条上
+      const tail = hasPct && !(rows.length > 1) && r.note ? ` · ${r.note}` : '';
+      return (head + (hasPct ? fmtPct(r.pct) : r.note || '') + tail).trim();
+    });
+    return parts.filter(Boolean).join(' · ') || '—';
   },
 
   paintResTiles() {
@@ -647,7 +741,7 @@ const App = {
       if (!item) continue;
       const body = node.querySelector('.dk-res');
       if (body) this.fillResRows(body, item);
-      node.dataset.rstate = !Res.data ? 'loading' : item.res === 'vol' && !Res.volume(item.vol) ? 'missing' : 'ok';
+      node.dataset.rstate = !Res.data ? 'loading' : Res.missing(item) ? 'missing' : 'ok';
       node.dataset.level = this.resLevel(item);
     }
     // 设置那一栏的行只有一串文字，跟主页的卡片共用同一份读数
@@ -657,6 +751,17 @@ const App = {
       if (!item || !cell) continue;
       cell.textContent = this.resReadout(item);
       node.dataset.level = this.resLevel(item);
+    }
+    // 勾选行的小格子只在卷 / 盘的名单真的变了才重铺：每 5 秒拆一次复选框会吃掉刚点下去的那一下
+    const sig = resPickSignature();
+    if (sig !== this.resPickSig) {
+      this.resPickSig = sig;
+      for (const node of $$('#dkTileList .dk-row[data-res="custom"]')) {
+        const item = items.find((l) => l.id === node.dataset.link);
+        const host = node.querySelector('.res-pick');
+        if (!item || !host) continue;
+        host.replaceWith(this.resPickBox(item));
+      }
     }
   },
 
@@ -1359,6 +1464,7 @@ const App = {
 
   /* ---------- Docker 组件共用的小件：状态那一行 + 实时数字（启停在右键菜单里，卡片上不占位置） ---------- */
 
+  // 卡片上只有「运行中」这一句：镜像名摆在设置那两列里，主页的卡上不占位置
   dockerMetaNode(item) {
     const box = document.createElement('span');
     box.className = 'dk-meta';
@@ -1368,11 +1474,7 @@ const App = {
     st.className = 'dk-state';
     st.dataset.stateText = '';
     st.textContent = Docker.stateText(Docker.get(item.container));
-    const img = document.createElement('span');
-    img.className = 'dk-image';
-    img.dataset.image = '';
-    img.hidden = true;
-    box.append(dot, st, img);
+    box.append(dot, st);
     return box;
   },
 
@@ -2146,10 +2248,12 @@ const App = {
     }
   },
 
-  /* ---------- NAS 资源一览：总览 / 内存各一枚固定条目，再加上服务端读得到的每一个卷，点一个加一张读数卡 ---------- */
+  /* ---------- NAS 资源一览：总览 / 内存 / 自定义三枚固定条目，再加上服务端读得到的每一个卷，点一个加一张读数卡 ---------- */
 
   // 一行对应一张卡：kind 是哪一种，vol 只有卷卡才带
   resRowState(kind, vol) {
+    // 自定义卡能摆好几张（各勾各的行），固定那三种一种只有一张
+    if (kind === 'custom') return { bound: false, cls: 'docker-row', mark: '＋ 加到主页' };
     const items = (Store.cfg && Store.cfg.docker && Store.cfg.docker.items) || [];
     const bound = items.some((l) => l.res === kind && (kind !== 'vol' || l.vol === vol));
     return { bound, cls: 'docker-row' + (bound ? ' bound' : ''), mark: bound ? '已在页面上' : '＋ 加到主页' };
@@ -2161,13 +2265,15 @@ const App = {
     host.innerHTML = '';
     if (hint) {
       hint.textContent = d
-        ? `能加三种读数卡：整台总览、内存、单个卷。这里只列服务端读得到的卷（现在 ${d.volumes.length} 个），想让页面多看见几卷，就在 compose 里给那一卷加一行只读挂载`
+        ? `读数卡有四种：整台总览、内存、单个卷，再加一张「自定义读数」——勾哪几行就画哪几行。这里只列服务端读得到的卷（现在 ${d.volumes.length} 个），卷是安装脚本挂进来的，NAS 上加了卷重跑一次脚本这一列就多一行`
         : Res.problem();
     }
-    // 一行行铺：固定的两张在前，卷按服务端给的顺序跟在后面
+    // 一行行铺：固定的那几种在前，卷按服务端给的顺序跟在后面
+    const memPct = d && d.memory && d.memory.total > 0 ? (d.memory.used / d.memory.total) * 100 : null;
     const rows = [
-      { kind: 'overview', name: RES_NAME.overview, state: d ? `${d.volumes.length} 卷 · ${(d.disks || []).length} 块盘` : '—', note: d ? `内存 ${fmtPct(d.memory ? (d.memory.used / d.memory.total) * 100 : null)}` : '' },
-      { kind: 'mem', name: RES_NAME.mem, state: d && d.memory ? fmtPct((d.memory.used / d.memory.total) * 100) : '—', note: d && d.memory ? `已用 ${fmtBytes(d.memory.used)} · 共 ${fmtBytes(d.memory.total)}` : '' },
+      { kind: 'overview', name: RES_NAME.overview, state: fmtPct(memPct), note: d ? `内存 + CPU + 网络 + GPU + ${d.volumes.length} 卷 + ${(d.disks || []).length} 盘` : '' },
+      { kind: 'mem', name: RES_NAME.mem, state: fmtPct(memPct), note: d && d.memory ? `已用 ${fmtBytes(d.memory.used)} · 共 ${fmtBytes(d.memory.total)}` : '' },
+      { kind: 'custom', name: RES_NAME.custom, state: `${RES_CUSTOM_DEFAULT.length} 行`, note: '默认 ' + RES_CUSTOM_DEFAULT.map((k) => resMetricLabel(k)).join(' / ') },
     ];
     for (const v of (d && d.volumes) || []) rows.push({ kind: 'vol', vol: v.id, name: v.name, state: fmtPct(v.pct), note: `已用 ${fmtBytes(v.used)} · 共 ${fmtBytes(v.total)}` });
     for (const r of rows) {
@@ -2175,11 +2281,11 @@ const App = {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = s.cls;
-      // 一种资源只能有一张卡：加过的直接按着，别再摆第二张同样的
+      // 固定那三种一种只能有一张：加过的直接按着，别再摆第二张同样的。自定义卡能摆好几张，各勾各的行
       b.disabled = s.bound;
       b.dataset.res = r.kind;
       if (r.vol) b.dataset.vol = r.vol;
-      b.dataset.level = this.resLevel({ res: r.kind, vol: r.vol });
+      b.dataset.level = this.resLevel(r.kind === 'custom' ? { res: 'custom', rows: RES_CUSTOM_DEFAULT } : { res: r.kind, vol: r.vol });
       b.append(
         Object.assign(document.createElement('span'), { className: 'docker-name', textContent: r.name }),
         Object.assign(document.createElement('span'), { className: 'docker-state', textContent: r.state }),
@@ -2197,19 +2303,20 @@ const App = {
     const v = kind === 'vol' ? Res.volume(vol) : null;
     const title = kind === 'vol' ? (v ? v.name : vol) : RES_NAME[kind];
     const size = RES_DEF[kind] || RES_DEF.mem;
-    // 总览卡有几行取决于这台 NAS 上有几个卷、几块盘，出厂高度按当前读到的行数算，别让最后几行被裁掉
-    const rows = kind === 'overview' ? this.resRows({ res: 'overview' }).length : 1;
-    const h = kind === 'overview' ? Math.min(DK_TILE.maxH, Math.max(size.h, rows * 28 + 44)) : size.h;
+    // 多行的那两种（总览 / 自定义）出厂高度按当前读到的行数算，别让最后几行被裁掉
+    const spec = kind === 'custom' ? { res: 'custom', rows: RES_CUSTOM_DEFAULT.slice() } : { res: kind, vol };
+    const h = resFitH(this.resRows(spec).length, size.h);
     Store.mutate((cfg) => {
       // 字段顺序照服务端规范化的那一套：可选的空键干脆不写，手改 config.json 才看得清
       const pos = this.nextDockerPos();
       const it = { id: uid('l'), title, url: '', icon: '', iconKind: 'letter', desc: '', res: kind, w: size.w, h, x: pos.x, y: pos.y };
       if (kind === 'vol') it.vol = vol;
+      if (kind === 'custom') it.rows = RES_CUSTOM_DEFAULT.slice();
       cfg.docker.items.push(it);
     });
     this.renderDockerTiles();
     this.renderDockerPane();
-    this.toast(`已添加 ${title} 读数卡`, 2600);
+    this.toast(kind === 'custom' ? '已添加自定义读数卡，在下面勾要显示哪几行' : `已添加 ${title} 读数卡`, 3200);
   },
 
   // 轮询顺手重铺这一列：行数就几行，整列重画比逐格改数字省事，也不会和点击抢 DOM
@@ -2708,8 +2815,77 @@ const App = {
     const acts = document.createElement('div');
     acts.className = 'btn-row';
     acts.append(this.miniBtn('✕', '移除这张读数卡（只是从主页摘掉，NAS 上的东西一点都不会动）', () => this.removeDockerItem(link)));
-    li.append(dot, name, meta, acts, this.dkSizeRow(link));
+    li.append(dot, name, meta, acts);
+    // 自定义卡多一排勾选：主页那张卡上只留数字，勾哪儿在这儿
+    if (link.res === 'custom') li.append(this.resPickBox(link));
+    li.append(this.dkSizeRow(link));
     return li;
+  },
+
+  // 自定义读数卡勾哪几行：一行一个格子，卷和盘按服务端读到的名单列出来
+  resPickBox(link) {
+    const box = document.createElement('div');
+    box.className = 'res-pick';
+    const d = Res.data;
+    if (!d) {
+      const tip = document.createElement('span');
+      tip.className = 'res-pick-tip';
+      tip.textContent = Res.problem();
+      box.appendChild(tip);
+      return box;
+    }
+    const opts = RES_METRICS.map((m) => ({ key: m.key, label: m.label }));
+    for (const v of d.volumes || []) opts.push({ key: 'vol:' + v.id, label: '只这一卷 · ' + v.name });
+    for (const x of d.disks || []) opts.push({ key: 'disk:' + x.name, label: '只这一块 · ' + (x.model || x.name) });
+    const has = new Set(Array.isArray(link.rows) ? link.rows : []);
+    const one = (p) => [...has].some((k) => k.startsWith(p));
+    const anyVolOne = one('vol:');
+    const anyDiskOne = one('disk:');
+    for (const o of opts) {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = has.has(o.key);
+      // 「全部卷」和「只这一卷」是同一批行的两种写法，同时勾会把那一卷画两遍
+      const clashing =
+        o.key === 'vols' ? anyVolOne
+        : o.key === 'disks' ? anyDiskOne
+        : o.key.startsWith('vol:') ? has.has('vols')
+        : o.key.startsWith('disk:') ? has.has('disks')
+        : false;
+      cb.disabled = clashing && !cb.checked;
+      label.className = 'res-pick-item' + (cb.checked ? ' on' : '') + (cb.disabled ? ' off' : '');
+      if (cb.disabled) {
+        label.title = o.key === 'vols' || o.key === 'disks' ? '已经单独勾了其中几行，先撤掉一个再勾这一档' : '这一行已经在「全部卷 / 全部硬盘」里了';
+      }
+      const text = document.createElement('span');
+      text.textContent = o.label;
+      cb.addEventListener('change', () => this.setResRowKey(link.id, o.key, cb.checked));
+      label.append(cb, text);
+      box.appendChild(label);
+    }
+    if (!has.size) {
+      const tip = document.createElement('span');
+      tip.className = 'res-pick-tip';
+      tip.textContent = '一行都没勾：卡上会写着这句提示。';
+      box.appendChild(tip);
+    }
+    return box;
+  },
+
+  // 勾一行 / 撤一行：显示顺序就是勾选的先后，最后勾的那个画在最下面
+  setResRowKey(itemId, key, on) {
+    Store.mutate((cfg) => {
+      const it = (cfg.docker.items || []).find((x) => x.id === itemId);
+      if (!it || it.res !== 'custom') return;
+      const rows = (Array.isArray(it.rows) ? it.rows : []).filter((k) => k !== key);
+      if (on) rows.push(key);
+      it.rows = rows;
+      // 行数变了别把新勾的那行裁掉：只在装不下时加高，要缩回去用「高」那个滑块
+      it.h = resFitH(rows.length, it.h);
+    });
+    this.renderDockerTiles();
+    this.renderDockerPane();
   },
 
   // 一张组件的长宽：滑块一边拖一边重画那张卡，改完就地存配置。位置不在这里调，去主页长按拖
