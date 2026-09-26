@@ -747,6 +747,12 @@ html[data-weather="off"] .topbar { display: none; }
 }
 .docker-bind code.unset { color: var(--text-faint); background: transparent; border-style: dashed; }
 
+/* 读数卡每一行的小名：左边是读数自己的名字（型号 / 卷名 / 指标名），右边填想叫的名字，留空即用左边那个 */
+.res-names { display: grid; gap: 6px; max-height: min(32vh, 240px); overflow: auto; }
+.res-name-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); align-items: center; gap: 8px; }
+.res-name-row > span { min-width: 0; color: var(--text-dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.res-name-row .field { width: 100%; }
+
 .tile-x {
   position: absolute;
   top: 4px;

@@ -278,6 +278,18 @@ const normDockerItem = (l, used, cur) => {
       // 一行都没勾就干脆不写这个键：前端画一句提示，配置里少一个空数组
       if (rows.length) out.rows = rows;
     }
+    // 行的小名：读数卡上每一行的名字默认取自读数（型号、卷名、指标名），这里只存「这一行改叫别的」
+    // 键必须还是上面那套行键，画不到的键留着也无害；盘换过型号、卷改过池名都不挡着重命名
+    const want2 = o.rowNames && typeof o.rowNames === 'object' && !Array.isArray(o.rowNames) ? o.rowNames : null;
+    if (want2) {
+      const names = {};
+      for (const key of Object.keys(want2).slice(0, LIM.resRows)) {
+        if (!RES_ROW_RE.test(key)) continue;
+        const label = txt(want2[key], LIM.name).trim();
+        if (label) names[key] = label;
+      }
+      if (Object.keys(names).length) out.rowNames = names;
+    }
     if (!txt(pick(o, ['title', 'name', 'label', 'text']), LIM.text)) out.title = RES_TITLE[res] || out.vol || '未命名';
   }
   return withDkBox(out, o, cur);

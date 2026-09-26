@@ -183,6 +183,32 @@ function resKeysOf(item) {
   return ['mem'];
 }
 
+// 一张卡「现在有哪几行」：跟 resRows 走同一套展开，给「编辑读数卡」那一列改名输入框用。
+// 全部卷 / 全部硬盘在读到数据时展开成具体每一卷每一盘，读不到时保留聚合键（那行本来就只有一句「读不到」）。
+// 同时勾了「全部卷」和点名的某一卷会画两行重复的（这是已经认下来的行为），但一个键只给一个输入框
+function resRowKeys(item) {
+  const d = Res.data;
+  const seen = new Set();
+  const out = [];
+  for (const key of resKeysOf(item)) {
+    const all = key === 'vols' || key === 'disks';
+    const list = !all || !d ? null : (key === 'vols' ? d.volumes : d.disks) || [];
+    const expanded = list && list.length
+      ? list.map((x) => (key === 'vols' ? 'vol:' + x.id : 'disk:' + x.name))
+      : [key];
+    for (const k of expanded) if (!seen.has(k)) { seen.add(k); out.push(k); }
+  }
+  return out;
+}
+
+// 一行的默认名字就是读数自己给的那个（型号、卷名、指标名），改名输入框拿它当占位文字
+function resRowDefaultLabel(key) {
+  const d = Res.data;
+  if (!d) return resMetricLabel(key);
+  const row = resRowOf(key, d, false)[0];
+  return (row && row.k) || resMetricLabel(key);
+}
+
 // 一行只有一个指标时，名字已经在卡片标题上了；自定义卡的标题不说明内容，所以永远带名字
 function resLabelled(item) {
   return item.res === 'custom' || resKeysOf(item).length > 1;
@@ -203,6 +229,7 @@ function resPickSignature() {
 const resHas = (v) => Number.isFinite(v);
 
 // 一个键 → 这一张卡上的几行。有百分数的行给容量条，没有的（速率、盘容量）只给一行字
+// 每行都带回自己的 rk：展开出来的「全部卷 / 全部硬盘」要落到具体的卷 id、盘名上，行的小名才按那一行查
 function resRowOf(key, d, compact) {
   const usage = (total, used) =>
     total > 0
@@ -213,7 +240,7 @@ function resRowOf(key, d, compact) {
       : { note: '读不到用量' };
   if (key === 'mem') {
     const m = d.memory;
-    return [{ k: '内存', ...(m ? usage(m.total, m.used) : { note: '读不到内存' }) }];
+    return [{ rk: 'mem', k: '内存', ...(m ? usage(m.total, m.used) : { note: '读不到内存' }) }];
   }
   if (key === 'cpu') {
     const c = d.cpu || {};
@@ -222,37 +249,37 @@ function resRowOf(key, d, compact) {
     if (resHas(c.load && c.load[0])) bits.push(`${compact ? '负载' : '1 分钟负载'} ${c.load[0].toFixed(2)}`);
     const extra = bits.join(' · ');
     // 第一轮还没有可作差的上一次采样，那一句「刚开始采样」跟真的读不到是两回事
-    if (!resHas(c.used)) return [{ k: 'CPU', note: (c.warming ? '刚开始采样' : '占用读不到') + (extra ? ' · ' + extra : '') }];
-    return [{ k: 'CPU', pct: c.used, note: extra }];
+    if (!resHas(c.used)) return [{ rk: 'cpu', k: 'CPU', note: (c.warming ? '刚开始采样' : '占用读不到') + (extra ? ' · ' + extra : '') }];
+    return [{ rk: 'cpu', k: 'CPU', pct: c.used, note: extra }];
   }
   if (key === 'net') {
     const n = d.net || {};
-    if (!resHas(n.down) && !resHas(n.up)) return [{ k: '网络', note: n.warming ? '刚开始采样' : '读不到网络流量' }];
-    return [{ k: '网络', note: compact ? `↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)}` : `下行 ${fmtRate(n.down)} · 上行 ${fmtRate(n.up)}` }];
+    if (!resHas(n.down) && !resHas(n.up)) return [{ rk: 'net', k: '网络', note: n.warming ? '刚开始采样' : '读不到网络流量' }];
+    return [{ rk: 'net', k: '网络', note: compact ? `↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)}` : `下行 ${fmtRate(n.down)} · 上行 ${fmtRate(n.up)}` }];
   }
   if (key === 'gpu') {
     const g = d.gpu || {};
     // 服务端会带回「为什么没有」——驱动名与频率这类线索写在行上，比一句读不到有用
-    if (!resHas(g.used)) return [{ k: 'GPU', note: '读不到 GPU 占用' + (g.note ? '（' + g.note + '）' : '') }];
-    return [{ k: 'GPU', pct: g.used, note: compact ? '' : '显卡占用' }];
+    if (!resHas(g.used)) return [{ rk: 'gpu', k: 'GPU', note: '读不到 GPU 占用' + (g.note ? '（' + g.note + '）' : '') }];
+    return [{ rk: 'gpu', k: 'GPU', pct: g.used, note: compact ? '' : '显卡占用' }];
   }
   if (key === 'vols' || key === 'disks') {
     const list = (key === 'vols' ? d.volumes : d.disks) || [];
-    if (!list.length) return [{ k: key === 'vols' ? '存储卷' : '硬盘', note: (key === 'disks' && d.diskNote ? d.diskNote : '读不到') }];
+    if (!list.length) return [{ rk: key, k: key === 'vols' ? '存储卷' : '硬盘', note: (key === 'disks' && d.diskNote ? d.diskNote : '读不到') }];
     return key === 'vols'
-      ? list.map((v) => ({ k: v.name, ...usage(v.total, v.used) }))
-      : list.map((x) => ({ k: x.model || x.name, note: fmtBytes(x.size) }));
+      ? list.map((v) => ({ rk: 'vol:' + v.id, k: v.name, ...usage(v.total, v.used) }))
+      : list.map((x) => ({ rk: 'disk:' + x.name, k: x.model || x.name, note: fmtBytes(x.size) }));
   }
   const id = key.slice(key.indexOf(':') + 1);
   if (key.startsWith('vol:')) {
     const v = ((d.volumes || []).find((x) => x.id === id)) || null;
-    return [v ? { k: v.name, ...usage(v.total, v.used) } : { k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
+    return [v ? { rk: key, k: v.name, ...usage(v.total, v.used) } : { rk: key, k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
   }
   if (key.startsWith('disk:')) {
     const x = ((d.disks || []).find((y) => y.name === id)) || null;
-    return [x ? { k: x.model || x.name, note: fmtBytes(x.size) } : { k: id || '没选硬盘', note: '查不到这块硬盘' + (d.diskNote ? '（' + d.diskNote + '）' : '') }];
+    return [x ? { rk: key, k: x.model || x.name, note: fmtBytes(x.size) } : { rk: key, k: id || '没选硬盘', note: '查不到这块硬盘' + (d.diskNote ? '（' + d.diskNote + '）' : '') }];
   }
-  return [{ k: key, note: '不认识的行' }];
+  return [{ rk: key, k: key, note: '不认识的行' }];
 }
 
 // 读数卡没有站点图标可取，图形固定在这四枚白色描边 SVG 里（跟顶栏那两个同一画风）
@@ -670,6 +697,7 @@ const App = {
   },
 
   // 一张资源卡要画哪几行：把配置里的行键逐个换成读数，'vols' / 'disks' 会展开成好几行
+  // 改过行的小名在这一个出口上盖掉默认名（名称、悬停提示、设置里那一串读数都跟着走）
   resRows(item) {
     const d = Res.data;
     if (!d) return [{ k: RES_NAME[item.res], note: Res.problem() }];
@@ -678,6 +706,13 @@ const App = {
     const rows = [];
     for (const key of keys) rows.push(...resRowOf(key, d, labelled));
     if (!rows.length) rows.push({ k: '', note: '还没勾选要显示哪一行' });
+    const named = item.rowNames;
+    if (named && typeof named === 'object') {
+      for (const r of rows) {
+        const alias = r.rk && named[r.rk];
+        if (typeof alias === 'string' && alias) r.k = alias;
+      }
+    }
     return rows;
   },
 
@@ -1998,6 +2033,7 @@ const App = {
       res: resMode && link ? link.res : '',
       vol: resMode && link ? link.vol || '' : '',
       rows: resMode && link && Array.isArray(link.rows) ? link.rows.slice() : null,
+      rowNames: resMode && link && link.rowNames && typeof link.rowNames === 'object' ? { ...link.rowNames } : null,
       w: link && tileMode ? link.w : DK_TILE.defW,
       h: link && tileMode ? link.h : DK_TILE.defH,
       // 编辑已有组件时坐标原样带回去；新建那张（走「容器一览」那条路）落在最下面一张的下方
@@ -2018,6 +2054,7 @@ const App = {
     $('#lkUrlLanRow').hidden = resMode;
     $('#lkDescRow').hidden = resMode;
     $('#lkResHint').hidden = !resMode;
+    this.paintResRowNames();
     for (const v of ['auto', 'letter']) {
       const b = $('#iconKindSeg').querySelector(`button[data-v="${v}"]`);
       if (b) b.hidden = resMode;
@@ -2049,6 +2086,33 @@ const App = {
     const list = $('#lkDockerList');
     if (list.childElementCount) this.repaintCabinet(list, 'draft');
     else this.fillDockerCabinet(list, 'draft', $('#lkDockerCabinetHint'));
+  },
+
+  /* 「编辑读数卡」下面那一列：这张卡现在画了哪几行，就给几行改名输入框。
+     只有一行的卡（内存卡、单卷卡）行名本来就不画（名字在卡片标题上），所以那一栏整段不出现。 */
+  paintResRowNames() {
+    const d = this.linkDraft;
+    const box = $('#lkResRows');
+    const host = $('#lkResNames');
+    host.innerHTML = '';
+    const show = d.resMode && resLabelled(d);
+    box.hidden = !show;
+    if (!show) return;
+    for (const key of resRowKeys(d)) {
+      const def = resRowDefaultLabel(key);
+      const row = document.createElement('label');
+      row.className = 'res-name-row';
+      const label = document.createElement('span');
+      label.textContent = def;
+      const input = document.createElement('input');
+      input.className = 'field';
+      input.maxLength = 60;
+      input.placeholder = def;
+      input.dataset.rowKey = key;
+      input.value = (d.rowNames && d.rowNames[key]) || '';
+      row.append(label, input);
+      host.appendChild(row);
+    }
   },
 
   setLinkIconKind(kind) {
@@ -2085,6 +2149,18 @@ const App = {
       // 读数卡的 Emoji 留空 = 用内置那枚描边 SVG，所以不能像应用卡那样补一个默认链接图标
       if (d.iconKind === 'emoji') d.icon = ($('#lkEmoji').value.trim() || (d.resMode ? '' : '🔗')).slice(0, 4);
       if (d.iconKind === 'image') d.icon = normalizeUrl($('#lkImage').value);
+      // 行的小名：这一栏列出来的行按输入框重写（清空 = 回到默认名），没列出来的键原样留着——
+      // 例如卷暂时读不到时手写的 vols / vol:x，不该因为这一次保存被顺手删掉
+      if (d.resMode && !$('#lkResRows').hidden) {
+        const names = { ...(d.rowNames || {}) };
+        for (const input of $$('#lkResNames input')) {
+          const key = input.dataset.rowKey;
+          const v = input.value.trim().slice(0, 60);
+          if (v) names[key] = v;
+          else delete names[key];
+        }
+        d.rowNames = names;
+      }
       if (!d.title && (d.url || d.urlLan)) d.title = domainOf(d.url || d.urlLan) || d.url || d.urlLan;
       if (!d.title) return this.toast('请填写名称', 2500, true);
       if ($('#lkUrl').value.trim() && !d.url) return this.toast('外网网址协议不安全或格式不对', 3000, true);
@@ -2098,6 +2174,7 @@ const App = {
           const keep = { id: d.id, title: d.title, url: '', icon: d.icon, iconKind: d.iconKind, desc: '', res: d.res };
           if (d.vol) keep.vol = d.vol;
           if (d.rows && d.rows.length) keep.rows = d.rows;
+          if (d.rowNames && Object.keys(d.rowNames).length) keep.rowNames = d.rowNames;
           keep.w = d.w;
           keep.h = d.h;
           keep.x = d.x;
@@ -2859,7 +2936,7 @@ const App = {
     const acts = document.createElement('div');
     acts.className = 'btn-row';
     acts.append(
-      this.miniBtn('✎', '编辑：名称 / 图标', () => this.openLinkModal(link, '', 'res')),
+      this.miniBtn('✎', '编辑：名称 / 图标 / 每一行的小名', () => this.openLinkModal(link, '', 'res')),
       this.miniBtn('✕', '移除这张读数卡（只是从主页摘掉，NAS 上的东西一点都不会动）', () => this.removeDockerItem(link))
     );
     li.append(dot, name, meta, acts);

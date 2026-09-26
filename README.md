@@ -123,7 +123,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.0.4
+镜像：ghcr.io/peekaboo789/nasphere:1.0.5
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -194,7 +194,7 @@ chmod +x deploy.sh
 ./deploy.sh --tag 1.1.0
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.4`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.5`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -255,7 +255,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.4`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.5`，拉下来直接起容器。
 
 默认访问：
 
@@ -288,8 +288,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.0.4-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.4 ghcr.io/peekaboo789/nasphere:1.0.4
+docker load -i nasphere-1.0.5-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.5 ghcr.io/peekaboo789/nasphere:1.0.5
 docker compose up -d
 ```
 
@@ -301,10 +301,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.4 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.5 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.0.4
+docker pull ghcr.io/peekaboo789/nasphere:1.0.5
 ```
 
 然后：
@@ -318,7 +318,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.4
+  ghcr.io/peekaboo789/nasphere:1.0.5
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -367,7 +367,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.0.4-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.0.5-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -645,6 +645,18 @@ NAS 总览
 
 名字和图标随便改，读数本身改不了：「应用矩阵」那一栏每张读数卡右边的 ✎ 打开就是这两件事。图标留空
 就用这张卡自带的那枚描边图形，也可以换成 Emoji 或者上传一张图片。
+
+多行的卡（NAS 总览、自定义读数）还在同一个弹层里管一件事：每一行的小名。左边那列灰字是这一行默认的
+名字，右边那一格填你想叫的，留空就用默认名。
+
+```text
+内存 / CPU / 网络 / GPU　→ 指标名
+每一个卷　　　　　　　　 → 存储池名，比如 volume1
+每一块物理盘　　　　　　 → 盘上写的型号，比如 WDC WD100EFAX-68
+```
+
+于是同一块盘在「影音池那块」和「仓库盘那张卡」里可以叫两个名字，型号换了、盘换了重新探出来，小名也
+还认得那一行。只有一行的卡（内存卡、单个存储空间卡）没有这一列可改——那一行的名字本来就写在卡片标题上。
 
 显示：
 
@@ -1023,6 +1035,10 @@ http://
           "net",
           "vol:volume2"
         ],
+        "rowNames": {
+          "vol:volume2": "影音池",
+          "disk:sda": "仓库盘"
+        },
         "w": 300,
         "h": 156,
         "x": 350,
@@ -1043,6 +1059,8 @@ vol:<卷名>        disk:<盘名>
 ```
 
 `vols` / `disks` 是「每个卷一行」「每块盘一行」，跟点名的 `vol:` / `disk:` 同时勾会把那一卷画两遍，所以设置里的勾选框会把冲突的那格先按住。认不得的键、重复的键都会在保存时丢掉；一行都没勾，卡上就写着「还没勾选要显示哪一行」。
+
+`rowNames` 是上面那一列小名，键还是 `rows` 那套键（`vols` / `disks` 展开后要写具体的 `vol:<卷名>` / `disk:<盘名>`），值是最多 60 个字的显示名。勾了 `vols` 没点名某一卷时，给那一卷起的小名照样生效。画不到的键留着也不碍事，值写空等于不改名。
 
 ---
 
@@ -1078,6 +1096,7 @@ Docker 组件：
 X：0–4000
 Y：0–4000
 自定义读数的行：40
+改过的行名：40 个，每个 60 字
 ```
 
 非法网址协议，例如：
@@ -1320,7 +1339,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.0.4`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.0.5`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1573,6 +1592,26 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.0.5
+
+新增：读数卡上的每一行也能各自改名。
+
+「应用矩阵」那一栏每张读数卡右边的 ✎，除了名称和图标，现在还会把这张卡当前画的每一行列出来：左边那列灰字是这一行默认的名字，右边那一格填你想叫的。
+
+```text
+volume1　　　　　→ 影音池
+WDC WD100EFAX-68 → 仓库盘
+内存　　　　　　 → 运行内存
+```
+
+于是同一块硬盘在「NAS 总览」那张卡上叫「仓库盘」、在自定义卡里叫「冷备份那块」，各叫各的。留空的那几行照默认名，填了字的只改这一张卡上的显示，别的卡不动。
+
+盘换了型号、卷重新探出来，小名还认得那一行；不想要了就把那一格清空。只有「内存」卡和「单个存储空间」卡没有这一列——它们只有一行，那行的名字本来就写在卡片标题上。
+
+硬盘那一行报的还是型号加总容量，不是已用 / 总量：卷的用量走的是文件系统，盘的用量 sysfs 给不出来，所以盘只能按名字改称呼，暂时给不出百分比那根条。
+
+详见「📊 NAS 资源组件」。
 
 ## v1.0.4
 
