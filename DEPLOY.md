@@ -2,7 +2,7 @@
 
 面向第一次把这套装上手的操作手册：按顺序做下来能跑起来，出问题时按后面的章节查。功能层面的说明看 `README.md`，这里只讲部署与运维。
 
-- 版本：`package.json` 的 `version`（当前 `1.0.1`）。`deploy.sh` 里那个默认标签是单独写死的一行（`DEFAULT_TAG`），发新版时跟着改。
+- 版本：`package.json` 的 `version`（当前 `1.0.2`）。`deploy.sh` 里那个默认标签是单独写死的一行（`DEFAULT_TAG`），发新版时跟着改。
 - 镜像：公开发布在 `ghcr.io/peekaboo789/nasphere`，标签同版本。部署路线一律 `docker pull`，**不在 NAS 上构建**。
 - 运行时：单容器，`node:22-alpine`，零 npm 依赖，镜像里只有 `server/` 与 `public/`。
 - 所有状态都在挂载出来的数据目录里，换镜像、重建容器都不丢配置。
@@ -15,7 +15,7 @@
 | --- | --- |
 | 一台能跑 Docker 的 NAS | 群晖 Container Manager / 绿联 UGOS / 威联通 Container Station，或任何有 `docker` 的 Linux 机器 |
 | SSH 或图形终端 | SSH 最省事。只有网页图形界面也能装：在 DSM/UGOS 的 Compose 表单里照 §4 粘 `docker-compose.yml`，卷路径写成绝对路径，套件会自己从 `ghcr.io` 拉镜像；NAS 出不了网才需要 §5 的离线包（导入后按 §4 那两行重标成 compose 里的名字） |
-| 能拉 `ghcr.io` | 三条路线里只有 §5 不需要联网拉镜像。§3 和 §4 都是 `docker pull ghcr.io/peekaboo789/nasphere:1.0.1`，不构建、不下源码，所以也不用管 `node:22-alpine` 那个基础镜像 |
+| 能拉 `ghcr.io` | 三条路线里只有 §5 不需要联网拉镜像。§3 和 §4 都是 `docker pull ghcr.io/peekaboo789/nasphere:1.0.2`，不构建、不下源码，所以也不用管 `node:22-alpine` 那个基础镜像 |
 | CPU 是 x86_64 或 aarch64 | `deploy.sh` 开头就判这个，其余架构直接退出。**注意 ghcr 上目前只有 `linux/amd64` 一份 manifest**，ARM64 机型在线拉会报 `no matching manifest for linux/arm64/v8`，走 §5 的 arm64 离线包（多架构镜像推上来之后这条限制就没了） |
 | 端口没被占用 | 默认对外 `18086`（`deploy.sh --port` 或安装目录 `.env` 里 `HOST_PORT` 可改，手工 compose 就改 `docker-compose.yml` 的 `ports`），容器内固定监听 `18086`。`8080` 常被设备自带服务占用，所以默认值避开它；再冲突就换端口（见 §7） |
 
@@ -66,7 +66,7 @@ chmod 600 .env
 ```bash
 HOST_PORT=18086                 # 对外端口，容器内固定监听 18086
 DATA_DIR=/volume1/docker/nasphere/data   # 数据目录，留空就是 <安装目录>/data
-# TAG=1.1.0                     # 镜像标签，默认 1.0.1
+# TAG=1.1.0                     # 镜像标签，默认 1.0.2
 # IMAGE=ghcr.io/peekaboo789/nasphere   # 用自己的 fork 或内网仓库就改它
 # HOST_VOLUMES=/volume1 /volume2       # 主页要逐卷列硬盘用量才加：脚本各挂一行 /host/<同名>:ro（边界见 §12）
 ```
@@ -117,13 +117,13 @@ chmod +x deploy.sh        # 只有你自己把脚本拷进去时才需要
 | `读取 …/.env` | 安装目录里有 `.env` 才打印 |
 | `! …/.env 不会被读取，.env 要放在 <安装目录>/.env 才生效` | 你把 `.env` 留在了执行命令的目录里，而安装目录是别处。搬过去或加 `--root` |
 | `当前用户不在 docker 组，后续 Docker 命令将使用 sudo` | 后续 `docker` 命令自动加 sudo，可能提示输密码，属正常（管道执行输不了密码，见上面的权限说明） |
-| `镜像：ghcr.io/peekaboo789/nasphere:1.0.1` / `取镜像方式：docker pull（本机不需要源码，也不构建）` / `容器：compose 项目 nasphere → 容器名 nasphere-nasphere-1` / `端口：18086 → 容器内 18086` / `数据：…/data` / `时区：Asia/Shanghai` | 生效的参数，优先级是**命令行 > 环境变量 > `.env` > 默认值**；数据目录已转成绝对路径 |
+| `镜像：ghcr.io/peekaboo789/nasphere:1.0.2` / `取镜像方式：docker pull（本机不需要源码，也不构建）` / `容器：compose 项目 nasphere → 容器名 nasphere-nasphere-1` / `端口：18086 → 容器内 18086` / `数据：…/data` / `时区：Asia/Shanghai` | 生效的参数，优先级是**命令行 > 环境变量 > `.env` > 默认值**；数据目录已转成绝对路径 |
 | `首次启动：账号 admin、密码 admin123（镜像内置默认值）` | 部署前 `data/auth.json` 不存在时才打印（取样在容器启动之前，不会被服务端补写文件盖掉） |
 | `! 目录里那份 compose 不是本脚本生成的，已备份到 …/docker-compose.yml.backup-<时间戳>` | 目录里那份 yml 是你手写/从仓库拷来的，覆盖前先留一份。脚本自己生成的那份如果参数没变就只打印 `docker-compose.yml 与本次参数一致，未改动` |
 | `已生成 …/docker-compose.yml` 或 `docker-compose.yml 与本次参数一致，未改动` | compose 每次按本次参数重写，所以 `--port`、`--data-dir` 不会像以前那样被写死的 yml 吞掉 |
 | `没有已有配置，跳过备份` 或 `配置已备份到：<数据目录>/.deploy-backup/<时间戳>` | 升级前的 config/auth 快照，默认留最近 5 份（`KEEP_BACKUPS` 可调） |
 | `已记录旧版本镜像：sha256:abcdef1234` | 回滚锚点，同时另打一个 `<IMAGE>:rollback` 标签（§9）。首次部署没有这一行 |
-| `加载离线 Docker 镜像：…` → `已把包内镜像 local/nasphere:1.0.1 重标为 ghcr.io/peekaboo789/nasphere:1.0.1` | 仅 `--tar`：包里的名字与目标标签不一致时自动重标，走这条就不会去拉 ghcr |
+| `加载离线 Docker 镜像：…` → `已把包内镜像 local/nasphere:1.0.2 重标为 ghcr.io/peekaboo789/nasphere:1.0.2` | 仅 `--tar`：包里的名字与目标标签不一致时自动重标，走这条就不会去拉 ghcr |
 | `! 找不到 Docker Socket：/var/run/docker.sock` + `! NASphere Docker 管理功能将不可用（compose 里那行挂载已经省掉，其余功能照常）` | 宿主机上找不到套接字，跳过挂载——容器组件就没数据，需要的话按 §11 处理 |
 | `拉取 NASphere 镜像：…` | 就是 `docker pull`。失败时按架构给不同提示（ARM64 见上表架构那行），然后 `✕ 镜像没弄到手，部署到此为止；data/ 没有被改动` |
 | `启动 NASphere` → `Container nasphere-nasphere-1  Started` → `等待 NASphere 服务启动（最多 40s）` → `NASphere 安装/更新完成 ✓` + `访问地址：` / `  http://192.168.x.x:18086` | 起容器走的是 `docker compose up -d`；探活打的是免登录的 `/api/health`；最多等 `HEALTH_WAIT` 秒 |
@@ -161,11 +161,11 @@ docker compose logs --tail 30
 
 > yml 里没写 `container_name`，所以容器叫 `<compose 项目名>-nasphere-1`（项目名默认取目录名）。多台机器测试不会被「容器名已存在」顶住；要看是哪台就用 `docker compose ps`，别按名字找。
 
-NAS 到 `ghcr.io` 不通（没网、或被墙）就走 §5 的离线包。包里的名字是 `local/nasphere:1.0.1`，和 compose 写的那个不同名，`load` 完补一步重标，之后 compose 见本地已有同名镜像就不会再去拉：
+NAS 到 `ghcr.io` 不通（没网、或被墙）就走 §5 的离线包。包里的名字是 `local/nasphere:1.0.2`，和 compose 写的那个不同名，`load` 完补一步重标，之后 compose 见本地已有同名镜像就不会再去拉：
 
 ```bash
-docker load -i nasphere-1.0.1-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.1 ghcr.io/peekaboo789/nasphere:1.0.1
+docker load -i nasphere-1.0.2-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.2 ghcr.io/peekaboo789/nasphere:1.0.2
 docker compose up -d
 ```
 
@@ -181,14 +181,14 @@ docker compose up -d
 
 ```bash
 # 任何有 Docker 的电脑上
-./make-image.sh                       # → dist/nasphere-1.0.1.tar.gz 和 .sha256
+./make-image.sh                       # → dist/nasphere-1.0.2.tar.gz 和 .sha256
 ssh 你@NAS 'mkdir -p /volume1/docker/NASphere/dist'
-scp dist/nasphere-1.0.1.tar.gz* 你@NAS:/volume1/docker/NASphere/dist/
+scp dist/nasphere-1.0.2.tar.gz* 你@NAS:/volume1/docker/NASphere/dist/
 
 # NAS 上，在安装目录里
 cd /volume1/docker/NASphere
-sha256sum -c dist/nasphere-1.0.1.tar.gz.sha256
-./deploy.sh --tar dist/nasphere-1.0.1.tar.gz
+sha256sum -c dist/nasphere-1.0.2.tar.gz.sha256
+./deploy.sh --tar dist/nasphere-1.0.2.tar.gz
 ```
 
 ### C-2 电脑上也没有 Docker（只要装了 Node）
@@ -252,7 +252,7 @@ cp -a data /volume2/docker/nasphere-data
 
 **一键脚本**：在安装目录里 `./deploy.sh --tag <新版本>`，或者重跑 §3 那条 `curl … | bash`——它认得这个目录（旁边就有脚本生成的 compose），`data/` 原样留下，`.env` 也只读不写。脚本会先把在用的镜像记成回滚锚点、把 `config.json`、`auth.json` 存进 `data/.deploy-backup/`，再 pull 新标签、`docker compose up -d`、探活。
 
-> 不写 `--tag` 就是重跑当前默认标签（`1.0.1`）。ghcr 上同一个标签被重推过时，这次 pull 会拉回新的那份；想让升级有确定的落点，就给每个版本一个新标签。
+> 不写 `--tag` 就是重跑当前默认标签（`1.0.2`）。ghcr 上同一个标签被重推过时，这次 pull 会拉回新的那份；想让升级有确定的落点，就给每个版本一个新标签。
 
 **手工 compose**：NAS 上连项目文件都不用换，把 `docker-compose.yml` 里 `image` 的标签改成新版本，再 `docker compose up -d`（compose 见本地没有这个标签会自己去 ghcr 拉）。ghcr 上标签没变但镜像重推过，就先 `docker compose pull` 再 up。
 
@@ -268,7 +268,7 @@ cp -a data /volume2/docker/nasphere-data
   ```bash
   cd <安装目录>
   docker compose down
-  docker tag ghcr.io/peekaboo789/nasphere:rollback ghcr.io/peekaboo789/nasphere:1.0.1
+  docker tag ghcr.io/peekaboo789/nasphere:rollback ghcr.io/peekaboo789/nasphere:1.0.2
   docker compose up -d
   ```
 
@@ -299,7 +299,7 @@ docker compose up -d        # 或 ./deploy.sh
 
 | 现象 | 先查 | 处置 |
 | --- | --- | --- |
-| `这台机器上没有 docker` | 脚本要求 PATH 里有 docker | 用 Docker 图形套件里的 Compose/项目功能：先弄出 `ghcr.io/peekaboo789/nasphere:1.0.1` 这个镜像（§5 的离线包导入 + §4 那两行重标），再把 §4 那份 `docker-compose.yml` 贴进项目起起来；卷路径写绝对路径。或按 README「本地开发调试」直接跑 `node server/index.js` |
+| `这台机器上没有 docker` | 脚本要求 PATH 里有 docker | 用 Docker 图形套件里的 Compose/项目功能：先弄出 `ghcr.io/peekaboo789/nasphere:1.0.2` 这个镜像（§5 的离线包导入 + §4 那两行重标），再把 §4 那份 `docker-compose.yml` 贴进项目起起来；卷路径写绝对路径。或按 README「本地开发调试」直接跑 `node server/index.js` |
 | `连不上 docker 守护进程` | Docker / Container Manager 没启动；当前用户不在 docker 组 | 启动套件，或 `sudo ./deploy.sh`（脚本自己也会试 sudo） |
 | 一键安装报「没有权限写 …，也用不了免密 sudo」 | 目标目录的父级当前用户写不进去，而 `curl \| bash` 占住了 stdin，sudo 弹密码也输不了 | 整条命令用 root 跑（`curl … \| sudo bash`），或 `bash -s -- --root <你有权限的目录>`，或给当前用户配免密 sudo |
 | `拉取失败：ghcr.io/…`（AMD64 机器） | 这台机器到 `ghcr.io` 不通 | 换台机器 `docker save` 成离线包传上去，`./deploy.sh --tar <包>`；或者整套走 §4 的手工路线 |
@@ -351,13 +351,13 @@ docker exec nasphere-nasphere-1 env | grep -E 'PORT|DATA_DIR|DOCKER_HOST|TZ'
 node server/index.js
 
 # 唯一能在首启前定死密码的路线
-docker pull ghcr.io/peekaboo789/nasphere:1.0.1
+docker pull ghcr.io/peekaboo789/nasphere:1.0.2
 docker run -d --name nasphere-manual --restart unless-stopped \
   -p 18086:18086 \
   -e NAV_USER='admin' -e NAV_PASSWORD='你自己的强密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.1
+  ghcr.io/peekaboo789/nasphere:1.0.2
 
 # 探活与门禁
 curl -s http://127.0.0.1:18086/api/health                                # {"ok":true,...}

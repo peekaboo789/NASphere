@@ -119,7 +119,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.0.1
+镜像：ghcr.io/peekaboo789/nasphere:1.0.2
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -190,7 +190,7 @@ chmod +x deploy.sh
 ./deploy.sh --tag 1.1.0
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.1`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.2`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -251,7 +251,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.1`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.2`，拉下来直接起容器。
 
 默认访问：
 
@@ -284,8 +284,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.0.1-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.1 ghcr.io/peekaboo789/nasphere:1.0.1
+docker load -i nasphere-1.0.2-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.2 ghcr.io/peekaboo789/nasphere:1.0.2
 docker compose up -d
 ```
 
@@ -297,10 +297,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.1 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.2 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.0.1
+docker pull ghcr.io/peekaboo789/nasphere:1.0.2
 ```
 
 然后：
@@ -314,7 +314,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.1
+  ghcr.io/peekaboo789/nasphere:1.0.2
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -363,7 +363,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.0.1-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.0.2-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -1250,7 +1250,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.0.1`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.0.2`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1503,6 +1503,22 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.0.2
+
+新增：主页上多了三类 NAS 资源读数卡，在「应用矩阵」那一栏点一下就加。
+
+```text
+NAS 总览　→ 内存 + 每个卷 + 每块物理盘，一张卡看完
+内存　　　 → 单独一张内存用量卡
+存储空间　 → 一个卷一张卡，几个卷就能摆几张
+```
+
+每张卡 5 秒刷一轮，用量过 80% 数字和容量条转琥珀、过 90% 转红；坐标、长宽和容器组件一样，在主页上长按半秒拖到任意位置。
+
+只报容量，不读内容：内存取 `/proc/meminfo`，物理盘只取型号和容量，卷用量走 `statfs`。接口里没有挂载点路径，也没有文件名，任何时候都不会去翻卷里的东西。
+
+默认只看得见数据目录所在的那一卷；要逐卷显示，就给那一卷加一行只读挂载（`deploy.sh` 用 `HOST_VOLUMES` 生成），页面会自动多出对应的卡。详见「📊 NAS 资源组件」。
 
 ## v1.0.1
 
