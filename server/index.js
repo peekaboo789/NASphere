@@ -244,10 +244,25 @@ const withDkBox = (out, from, cur) => {
   return out;
 };
 
+// 资源组件的三种：内存 / 单个卷 / 整台 NAS 总览。跟容器组件同住 docker.items，靠 res 区分。
+const DK_RES = new Set(['mem', 'vol', 'overview']);
+const RES_TITLE = { mem: '内存', overview: 'NAS 总览' };
+// 卷 id 只跟服务端读数里的 id 精确比对，从不拼成路径；斜杠和打头的点照样挡在门外，读代码的人不用去找第二道保险
+const VOL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$/;
+
 // 只写一个容器名的简写也算一条：{ items: ['nginx'] }
 const normDockerItem = (l, used, cur) => {
   const o = typeof l === 'string' ? { container: l } : l && typeof l === 'object' ? l : {};
-  return withDkBox(normLink(o, used), o, cur);
+  const out = normLink(o, used);
+  const res = DK_RES.has(String(o.res)) ? String(o.res) : '';
+  if (res) {
+    out.res = res;
+    const want = txt(pick(o, ['vol', 'volume', 'volId']), LIM.name);
+    // 只有卷卡需要知道是哪一卷
+    if (res === 'vol' && VOL_ID_RE.test(want)) out.vol = want;
+    if (!txt(pick(o, ['title', 'name', 'label', 'text']), LIM.text)) out.title = RES_TITLE[res] || out.vol || '未命名';
+  }
+  return withDkBox(out, o, cur);
 };
 
 // 改名之前出厂就写着这两个标题的配置，读到时换成现品牌名；用户自己敲过的标题原样保留
@@ -340,8 +355,8 @@ function sanitize(raw) {
   const cur = { x: 0, y: 0, rowH: 0 };
   // 摘出来的老卡片已经取过号了（id 就在 linkIds 里），只补框，别再走一遍取号，否则每次迁移都换 id
   const dkItems = rawDkItems.map((i) => normDockerItem(i, linkIds, cur)).concat(carried.map((i) => withDkBox(i, i, cur)));
-  // 没绑容器的条目不成其为组件，直接丢掉（绑过的容器名就是启停接口的白名单）
-  const items = dkItems.filter((i) => i.container);
+  // 既没绑容器又没标资源类型的条目不成其为组件，直接丢掉（绑过的容器名就是启停接口的白名单）
+  const items = dkItems.filter((i) => i.container || i.res);
 
   const todoIds = new Set();
   const todos = Array.isArray(src.notes?.todos)
@@ -909,6 +924,140 @@ function dockerAct(name, action) {
   });
 }
 
+/* ---------- NAS 资源读数：内存 / 每个卷的用量 / 物理盘型号 ----------
+   边界只有一条：只取容量的数字，不读任何文件内容。
+     · 内存取 /proc/meminfo 的两个计数，读不到就用 os 模块给的同一份统计
+     · 物理盘取 /sys/block 的目录名、size 与 device/model，那里只有型号和大小，从来不是路径
+     · 每个卷只对目录本身调一次 statfs：那是整个文件系统的账，返回里不会出现一个文件名
+   候选卷 = 数据目录 + 挂进来的 /host 第一层目录。宿主机没挂进来的目录在容器里本来就不存在，
+   所以他在 compose 里补一行只读挂载，页面自己就多出一张卷卡片，这里不需要配开关。 */
+
+// 自测用的前缀：把一份假的 proc / sys / host 目录树指过来，在没有 Linux 的开发机上也能跑通这套解析
+const SYS_ROOT = path.resolve(process.env.NAV_SYS_ROOT || '/');
+const SYS_TTL = 5000;
+// 只认物理盘的命名前缀：loop / ram / zram / sr / md / dm 都是包出来的设备，报成硬盘会误导
+const DISK_RE = /^(?:hd[a-z]|sd[a-z]|nvme\d+n\d+|mmcblk\d+|vd[a-z]|xvd[a-z])$/;
+// /sys/block/*/size 自己写着单位是 512 字节，跟机器扇区无关
+const SECTOR = 512;
+
+const sysPath = (...parts) => path.join(SYS_ROOT, ...parts);
+
+function readSysText(rel) {
+  try {
+    return String(fs.readFileSync(sysPath(rel), 'utf8')).trim();
+  } catch {
+    return '';
+  }
+}
+
+function memFromOs() {
+  const total = os.totalmem();
+  const avail = os.freemem();
+  return { total, used: Math.max(0, total - avail), avail };
+}
+
+function readMemory() {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(sysPath('proc', 'meminfo'), 'utf8');
+  } catch {
+    return memFromOs();
+  }
+  const lines = raw.split('\n');
+  // 'MemTotal:  32800128 kB' → 32800128 * 1024
+  const kbOf = (key) => {
+    const hit = lines.find((l) => l.startsWith(key + ':'));
+    if (!hit) return NaN;
+    const n = Number(hit.slice(key.length + 1).trim().split(/\s+/)[0]);
+    return Number.isFinite(n) ? n * 1024 : NaN;
+  };
+  const total = kbOf('MemTotal');
+  const avail = kbOf('MemAvailable');
+  if (!(total > 0) || !(avail >= 0)) return memFromOs();
+  return { total, used: Math.max(0, total - avail), avail };
+}
+
+function readDisks() {
+  let names;
+  try {
+    names = fs
+      .readdirSync(sysPath('sys', 'block'), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && DISK_RE.test(d.name))
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    const blocks = Number(readSysText(path.join('sys', 'block', name, 'size')));
+    // 0 块是空读卡器和光驱残留，列出来只会碍眼
+    if (!(blocks > 0)) continue;
+    out.push({ name, model: readSysText(path.join('sys', 'block', name, 'device', 'model')).slice(0, 40), size: blocks * SECTOR });
+  }
+  return out;
+}
+
+// 目录 → 整个文件系统的容量账；statfs 只看目录本身，不碰里面的内容
+function readVolume(id, name, dir) {
+  let st;
+  let dev;
+  try {
+    // 用 statSync 而不是目录项的类型：挂点常是 bind mount / 链接，只看类型会漏
+    const s = fs.statSync(dir);
+    if (!s.isDirectory()) return null;
+    dev = s.dev;
+    st = fs.statfsSync(dir);
+  } catch {
+    return null;
+  }
+  // 块数按 fragment size 折算才是 POSIX 的口径，环境没给 frsize 时才退回 bsize
+  const unit = st.frsize > 0 ? st.frsize : st.bsize;
+  const total = st.blocks * unit;
+  if (!(unit > 0) || !(total > 0)) return null;
+  const used = Math.max(0, (st.blocks - st.bfree) * unit);
+  const pct = Math.min(100, Math.max(0, (used / total) * 100));
+  // 挂载点路径不给前端：那一串字符对页面没用，接口里留纯数字和名字边界更干净
+  return { dev, vol: { id, name, total, used, avail: st.bavail * unit, pct: Math.round(pct * 10) / 10 } };
+}
+
+function readVolumes() {
+  const candidates = [{ id: 'data', name: '数据盘', dir: DATA_DIR }];
+  try {
+    for (const name of fs.readdirSync(sysPath('host')).sort()) {
+      candidates.push({ id: name, name, dir: sysPath('host', name) });
+    }
+  } catch {
+    // 没挂 /host 就只剩数据目录，这本来的默认样子
+  }
+  const seen = new Set();
+  const out = [];
+  for (const c of candidates) {
+    const hit = readVolume(c.id, c.name, c.dir);
+    if (!hit) continue;
+    // 同一个文件系统只报一次：数据目录常常就摆在某一卷里面
+    if (hit.dev) {
+      if (seen.has(hit.dev)) continue;
+      seen.add(hit.dev);
+    }
+    out.push(hit.vol);
+  }
+  return out;
+}
+
+const sysCache = ttlCache(SYS_TTL, SYS_TTL);
+
+function systemState() {
+  return sysCache.load(() => ({
+    ok: true,
+    error: '',
+    at: Date.now(),
+    memory: readMemory(),
+    volumes: readVolumes(),
+    disks: readDisks(),
+  }));
+}
+
 function handleLogin(req, res, body) {
   const ip = clientIp(req);
   const now = Date.now();
@@ -1180,6 +1329,11 @@ const server = http.createServer((req, res) => {
         send(res, 200, { ok: true });
       })
       .catch((e) => send(res, e.status === 404 ? 404 : 502, { error: 'Docker 操作失败：' + e.message }));
+  }
+
+  // NAS 资源读数：内存、各卷用量、物理盘型号。全是容量数字，没有一个文件内容
+  if (p === '/api/system/state' && req.method === 'GET') {
+    return systemState().then((r) => send(res, 200, r, { 'Cache-Control': 'no-store' }));
   }
 
   if (p === '/api/wallpaper/bing') return handleBing(res);

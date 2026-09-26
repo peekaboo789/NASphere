@@ -1225,6 +1225,99 @@ select.field { max-width: 220px; }
 body.holding-drag .dk-tile { cursor: grabbing; }
 body.holding-drag .dk-tile.dragging:hover { transform: none; }
 
+/* ---------- 资源读数卡：内存 / 单个卷 / 整台总览。外壳还是上面那套 .dk-tile（同一层暗凹槽底），
+   换掉的只有右边那块内容：从「名称 + 状态 + 三个数」变成「几行读数 + 几根容量条」。
+   这里出现的全部是数字，没有一个文件名 —— 服务端本来也只给数字。 ---------- */
+
+.dk-tile[data-res] {
+  grid-template-areas:
+    "icon title"
+    "icon body";
+}
+/* 三枚图形是写死在 app.js 里的白色描边 SVG，画风跟顶栏那两个按钮一致 */
+.dk-res-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dk-res {
+  grid-area: body;
+  align-self: center;
+  justify-self: stretch;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+/* 一行两项：上行「名称 · 数字 …… 百分比」，下行那根条 */
+.dk-res-row { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.dk-res-top { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.dk-res-k {
+  flex: none;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.dk-res-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.84em;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.dk-res-pct {
+  flex: none;
+  margin-left: auto;
+  font-size: 0.92em;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+/* 条本身：一道比凹槽底亮一点的槽 + 一段填充，不给发光、不加描边 */
+.dk-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--field);
+  overflow: hidden;
+}
+.dk-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.28s var(--ease-out), background 0.2s ease;
+}
+/* 告警档跟容器状态那三档同色：先琥珀、再红，整行的百分比跟着一起变色 */
+[data-level="warn"] .dk-bar i { background: #fbbf24; }
+[data-level="full"] .dk-bar i { background: #f87171; }
+[data-level="warn"] .dk-res-pct,
+.docker-row[data-level="warn"] .docker-state { color: #fbbf24; }
+[data-level="full"] .dk-res-pct,
+.docker-row[data-level="full"] .docker-state { color: #f87171; }
+/* 读数卡的状态点：正常读到 / 吃紧 / 快满 / 读不到，四档一眼分得开 */
+#dkTileList .dk-row[data-level="ok"] > .stat-dot { background: #4ade80; }
+#dkTileList .dk-row[data-level="warn"] > .stat-dot { background: #fbbf24; }
+#dkTileList .dk-row[data-level="full"] > .stat-dot { background: #f87171; }
+/* 设置那一行只有一串数字，等宽才不至于每轮刷数都抖一下 */
+#dkTileList .dk-row[data-res] [data-res-text] { font-variant-numeric: tabular-nums; }
+/* 卷没挂进容器、服务端还没回话：整张压暗一档，跟停着的容器卡同一档轻重 */
+.dk-tile[data-rstate="missing"],
+.dk-tile[data-rstate="loading"] { opacity: 0.68; }
+.dk-tile[data-rstate="missing"] .dk-res-pct,
+.dk-tile[data-rstate="loading"] .dk-res-pct { color: var(--text-dim); }
+
 /* 设置里那一行的两个宽高滑块 */
 .dk-row { flex-wrap: wrap; }
 .dk-row .size-set {

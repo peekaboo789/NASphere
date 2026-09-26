@@ -146,6 +146,98 @@ const Docker = {
   },
 };
 
+/* ---------- NAS 资源读数：内存、每个卷的容量、物理盘型号。5 秒一轮，只在页面上真有资源组件时才跑 ---------- */
+
+// 单指标卡跟容器组件同尺寸；总览卡的出厂高度按当时读到的行数算（见 useResRow），这里只给下限
+const RES_DEF = { mem: { w: 250, h: 118 }, vol: { w: 250, h: 118 }, overview: { w: 320, h: 208 } };
+const RES_POLL_MS = 5000;
+// 用量条的告警档：接近满先琥珀、再满转红，跟容器状态那套颜色同一刻度
+const RES_WARN = 80;
+const RES_FULL = 90;
+const RES_NAME = { mem: '内存', vol: '存储空间', overview: 'NAS 总览' };
+
+// 读数卡没有站点图标可取，图形固定在这三枚白色描边 SVG 里（跟顶栏那两个同一画风）
+const RES_ICON = {
+  mem: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.6" y="6.4" width="18.8" height="9.6" rx="1.6"></rect><path d="M6.4 16v3.4M12 16v3.4M17.6 16v3.4M6.8 9.8h3.2M14 9.8h3.2M6.8 12.8h3.2M14 12.8h3.2"></path></svg>',
+  vol: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.6" y="5.2" width="18.8" height="13.6" rx="2"></rect><path d="M2.6 12h18.8"></path><circle cx="6.6" cy="15.6" r="1.1"></circle><path d="M10.4 15.6h7.4M6.6 8.4h7.4"></path></svg>',
+  overview: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.4 20.8 8 12 12.6 3.2 8z"></path><path d="M3.2 12.6 12 17.2l8.8-4.6M3.2 16.8 12 21.4l8.8-4.6"></path></svg>',
+};
+
+const Res = {
+  data: null,
+  error: '',
+  timer: 0,
+  busy: false,
+  bound: false,
+
+  wanted() {
+    return ((Store.cfg && Store.cfg.docker && Store.cfg.docker.items) || []).some(isResource);
+  },
+
+  volume(id) {
+    return ((this.data && this.data.volumes) || []).find((v) => v.id === id) || null;
+  },
+
+  problem() {
+    return this.error || (this.data ? '这一项读不到' : '正在读取 NAS 的用量…');
+  },
+
+  // 点一下不跳转的资源卡：报一句当前读数，跟容器卡那句一个形状
+  summary(item) {
+    return `${item.title || RES_NAME[item.res] || 'NAS 资源'}：${App.resReadout(item)}`;
+  },
+
+  // 每次重画主页之后调用：一个资源组件都没有就把轮询停掉；拿到第一份读数前别白重画
+  sync() {
+    clearInterval(this.timer);
+    this.timer = 0;
+    if (!this.wanted()) return;
+    if (!this.bound) {
+      this.bound = true;
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && this.timer) this.fetch();
+      });
+    }
+    if (this.data) this.paintAll();
+    else this.fetch();
+    this.timer = setInterval(() => {
+      if (!document.hidden) this.fetch();
+    }, RES_POLL_MS);
+  },
+
+  stop() {
+    clearInterval(this.timer);
+    this.timer = 0;
+  },
+
+  // 「NAS 资源」那一栏在页面上还没有读数卡时也得列出卷：开这一栏先补一轮，轮询要不要接着跑归 sync() 管
+  ensure() {
+    if (this.data || this.busy) this.paintAll();
+    else this.fetch();
+  },
+
+  async fetch() {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      const r = await Api.systemState();
+      this.data = r;
+      this.error = '';
+    } catch (e) {
+      // 取不到就留着上一轮的数字，别让一次抖动把卡片刷成空
+      this.error = e.message;
+    } finally {
+      this.busy = false;
+    }
+    this.paintAll();
+  },
+
+  paintAll() {
+    App.paintResTiles();
+    App.repaintResCabinet();
+  },
+};
+
 const App = {
   bound: false,
   bingToken: 0,
@@ -341,13 +433,15 @@ const App = {
       layer.innerHTML = '';
       layer.style.height = '0px';
       Docker.sync();
+      Res.sync();
       return;
     }
     layer.hidden = false;
     layer.innerHTML = '';
-    for (const item of items) layer.appendChild(this.dockerTileNode(item));
+    for (const item of items) layer.appendChild(isResource(item) ? this.resTileNode(item) : this.dockerTileNode(item));
     this.fitDockerLayer();
     Docker.sync();
+    Res.sync();
   },
 
   /* 绝对定位不撑页面高度：这条摆放区的高度得按最下面那张组件自己拉出来，
@@ -371,6 +465,12 @@ const App = {
   },
 
   dockerTileNode(item) {
+    return this.dkTileShell(item, [this.iconNode(item), this.dkTitleNode(item), this.dockerMetaNode(item), this.dockerStatNode()]);
+  },
+
+  /* 两种组件共用的外壳：坐标尺寸、名称、编辑模式那颗 ✕、长按拖、右键菜单、没填网址时点一下报状态，
+     全都一套。中间那几行数字由调用方各填自己的节点。 */
+  dkTileShell(item, kids) {
     const a = document.createElement('a');
     const href = linkHref(item, this.netMode);
     a.className = 'dk-tile' + (href ? '' : ' dk-no-href');
@@ -379,27 +479,26 @@ const App = {
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     a.dataset.link = item.id;
-    a.dataset.container = item.container;
+    // 容器组件挂 data-container 让 Docker 那轮刷数找到它；资源组件挂 data-res，两套轮询互不认领
+    if (isResource(item)) {
+      a.dataset.res = item.res;
+      if (item.vol) a.dataset.vol = item.vol;
+    } else {
+      a.dataset.container = item.container;
+    }
     // 位置与尺寸都走 CSS 变量：窄屏要在「配置的 px」和「屏幕可用宽」之间取小的，写死 style.left 就夹不住
     a.style.setProperty('--dk-x', (item.x || 0) + 'px');
     a.style.setProperty('--dk-y', (item.y || 0) + 'px');
     a.style.setProperty('--dk-tile-w', item.w + 'px');
     a.style.setProperty('--dk-tile-h', item.h + 'px');
     a.title = item.desc ? `${item.title}\n${item.desc}` : item.title;
-
-    const title = document.createElement('span');
-    title.className = 'tile-title';
-    title.textContent = item.title;
-    a.appendChild(this.iconNode(item));
-    a.appendChild(title);
-    a.appendChild(this.dockerMetaNode(item));
-    a.appendChild(this.dockerStatNode());
+    a.append(...kids);
 
     if (Store.editMode) {
       const x = document.createElement('button');
       x.className = 'tile-x';
       x.type = 'button';
-      x.title = '移除这张组件（只从主页摘掉，不动 NAS 上的容器）';
+      x.title = isResource(item) ? '移除这张组件（只是从主页摘掉，NAS 上的东西一点都不会动）' : '移除这张组件（只从主页摘掉，不动 NAS 上的容器）';
       x.textContent = '✕';
       x.addEventListener('click', (e) => {
         e.preventDefault();
@@ -421,11 +520,144 @@ const App = {
       a.addEventListener('click', (e) => {
         if (Store.editMode) return;
         e.preventDefault();
-        // 容器组件本来就可以不填网址，点击给一句当前状态
-        this.toast(Docker.summary(item.container), 2600);
+        // 组件本来就可以不填网址，点击给一句当前状态
+        this.toast(this.tileSummary(item), 2600);
       });
     }
     return a;
+  },
+
+  dkTitleNode(item) {
+    const title = document.createElement('span');
+    title.className = 'tile-title';
+    title.textContent = item.title;
+    return title;
+  },
+
+  tileSummary(item) {
+    return isResource(item) ? Res.summary(item) : Docker.summary(item.container);
+  },
+
+  /* ---------- 资源组件：图标 + 名称 + 几行「用量条 + 数字」，数字每 5 秒换一轮 ---------- */
+
+  resTileNode(item) {
+    const icon = document.createElement('span');
+    icon.className = 'tile-icon dk-res-icon';
+    icon.innerHTML = RES_ICON[item.res] || RES_ICON.overview;
+    return this.dkTileShell(item, [icon, this.dkTitleNode(item), this.resBodyNode(item)]);
+  },
+
+  resBodyNode(item) {
+    const box = document.createElement('span');
+    box.className = 'dk-res';
+    this.fillResRows(box, item);
+    return box;
+  },
+
+  // 一张资源卡要画哪几行：内存、每个卷、每块物理盘。盘只有型号和大小，用量根本量不到，所以不给条
+  resRows(item) {
+    const d = Res.data;
+    if (!d) return [{ k: RES_NAME[item.res], note: Res.problem() }];
+    // 总览卡一行要装「名称 + 数字 + 百分比 + 条」，数字写成 3.1 GB / 16 GB 才塞得进；单指标卡没名字要认，用整句
+    const usage = (total, used, compact) =>
+      total > 0
+        ? {
+            pct: Math.min(100, Math.max(0, (used / total) * 100)),
+            note: compact
+              ? `${fmtBytes(used)} / ${fmtBytes(total)}`
+              : `已用 ${fmtBytes(used)} · 共 ${fmtBytes(total)}`,
+          }
+        : { note: '读不到用量' };
+    const rows = [];
+    if (item.res === 'mem') {
+      const m = d.memory;
+      rows.push(m ? usage(m.total, m.used) : { note: '读不到内存' });
+    }
+    if (item.res === 'vol') {
+      const v = Res.volume(item.vol);
+      rows.push(v ? { k: v.name, ...usage(v.total, v.used) } : { k: item.vol || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' });
+    }
+    if (item.res === 'overview') {
+      const m = d.memory;
+      rows.push(m ? { k: '内存', ...usage(m.total, m.used, true) } : { k: '内存', note: '读不到内存' });
+      for (const v of d.volumes || []) rows.push({ k: v.name, ...usage(v.total, v.used, true) });
+      for (const disk of d.disks || []) rows.push({ k: disk.model || disk.name, note: fmtBytes(disk.size) });
+    }
+    return rows;
+  },
+
+  /* 一轮刷数只换这几行文字和条的宽度，整张卡不重建：重建会把长按拖拽和悬停都打断。 */
+  fillResRows(box, item) {
+    box.innerHTML = '';
+    const labelled = item.res === 'overview';
+    for (const r of this.resRows(item)) {
+      const pct = Number.isFinite(r.pct) ? r.pct : null;
+      const row = document.createElement('span');
+      row.className = 'dk-res-row';
+      row.dataset.level = pct === null ? 'flat' : pct >= RES_FULL ? 'full' : pct >= RES_WARN ? 'warn' : 'ok';
+      const top = document.createElement('span');
+      top.className = 'dk-res-top';
+      const k = document.createElement('span');
+      k.className = 'dk-res-k';
+      k.textContent = r.k || RES_NAME[item.res] || '';
+      k.hidden = !labelled;
+      const note = document.createElement('span');
+      note.className = 'dk-res-note';
+      note.textContent = r.note || '';
+      top.append(k, note);
+      row.appendChild(top);
+      if (pct !== null) {
+        const num = document.createElement('b');
+        num.className = 'dk-res-pct';
+        num.textContent = fmtPct(pct);
+        top.appendChild(num);
+        const bar = document.createElement('span');
+        bar.className = 'dk-bar';
+        const fill = document.createElement('i');
+        // 写内联宽度而不是 --pct：这一格每轮都要变，CSS 变量还得再配一条 transition 规则
+        fill.style.width = pct.toFixed(1) + '%';
+        bar.appendChild(fill);
+        row.appendChild(bar);
+      }
+      box.appendChild(row);
+    }
+  },
+
+  // 整张卡该注意的那一档：取各行里最高的那一档用量，没有百分比（只报容量的盘）就是 flat
+  resLevel(spec) {
+    const pcts = this.resRows(spec).map((r) => r.pct).filter((p) => Number.isFinite(p));
+    if (!pcts.length) return 'flat';
+    const top = Math.max(...pcts);
+    return top >= RES_FULL ? 'full' : top >= RES_WARN ? 'warn' : 'ok';
+  },
+
+  // 一行话把这张卡读到的数字讲完，主页上点卡的提示和设置里的行都用它
+  resReadout(item) {
+    const rows = this.resRows(item);
+    const live = rows.filter((r) => Number.isFinite(r.pct));
+    if (!live.length) return rows[0].note;
+    if (live.length === 1) return `${fmtPct(live[0].pct)} · ${live[0].note}`;
+    return live.map((r) => `${r.k} ${fmtPct(r.pct)}`).join(' · ');
+  },
+
+  paintResTiles() {
+    const items = (Store.cfg.docker && Store.cfg.docker.items) || [];
+    for (const node of $$('#dkLayer .dk-tile[data-res]')) {
+      const item = items.find((l) => l.id === node.dataset.link);
+      if (!item) continue;
+      const body = node.querySelector('.dk-res');
+      if (body) this.fillResRows(body, item);
+      node.dataset.rstate = !Res.data ? 'loading' : item.res === 'vol' && !Res.volume(item.vol) ? 'missing' : 'ok';
+      node.dataset.level = this.resLevel(item);
+    }
+    // 设置那一栏的行只有一串文字，跟主页的卡片共用同一份读数
+    for (const node of $$('#dkTileList .dk-row[data-res]')) {
+      const item = items.find((l) => l.id === node.dataset.link);
+      const cell = node.querySelector('[data-res-text]');
+      if (!item || !cell) continue;
+      cell.textContent = this.resReadout(item);
+      node.dataset.level = this.resLevel(item);
+    }
   },
 
   /* ---------- 长按拖动组件：和分组卡片同一档长按（420ms），只是落点是自由坐标而不是插入位 ---------- */
@@ -536,7 +768,10 @@ const App = {
   },
 
   removeDockerItem(item) {
-    if (!confirm(`把「${item.title}」从主页摘掉？\n（只是撤下组件，NAS 上的容器 ${item.container} 不会被动到）`)) return;
+    const ask = isResource(item)
+      ? `把「${item.title}」从主页摘掉？\n（只是撤下这张读数卡，NAS 上的文件和设置都不会动）`
+      : `把「${item.title}」从主页摘掉？\n（只是撤下组件，NAS 上的容器 ${item.container} 不会被动到）`;
+    if (!confirm(ask)) return;
     Store.mutate((c) => {
       c.docker.items = c.docker.items.filter((l) => l.id !== item.id);
     });
@@ -550,16 +785,21 @@ const App = {
     menu.innerHTML = '';
     const href = linkHref(item, this.netMode);
     if (href) {
-      menu.appendChild(this.ctxItem('↗ 打开 ' + (domainOf(href) || item.container), false, () => window.open(href, '_blank', 'noopener')));
+      menu.appendChild(this.ctxItem('↗ 打开 ' + (domainOf(href) || item.title), false, () => window.open(href, '_blank', 'noopener')));
       menu.appendChild(this.ctxItem('⧉ 复制链接', false, async () => this.toast((await copyText(href)) ? '链接已复制' : '复制失败', 2200, true)));
     }
     // 只有查到的那一刻是运行中才给停止 / 重启，反过来才给启动；数据还没回来就全部按着
-    const info = Docker.get(item.container);
-    const running = Boolean(info && info.state === 'running');
-    menu.appendChild(this.ctxItem('▶ 启动容器', false, () => this.actContainer(item.container, 'start'), running || !info));
-    menu.appendChild(this.ctxItem('■ 停止容器', true, () => this.actContainer(item.container, 'stop'), !running));
-    menu.appendChild(this.ctxItem('⟳ 重启容器', false, () => this.actContainer(item.container, 'restart'), !running));
-    menu.appendChild(this.ctxItem('✕ 移除组件', true, () => this.removeDockerItem(item)));
+    if (isResource(item)) {
+      // 资源组件没有可操作的对象，只有数字：启停那三项别出现在它身上
+      menu.appendChild(this.ctxItem('✕ 移除组件', true, () => this.removeDockerItem(item)));
+    } else {
+      const info = Docker.get(item.container);
+      const running = Boolean(info && info.state === 'running');
+      menu.appendChild(this.ctxItem('▶ 启动容器', false, () => this.actContainer(item.container, 'start'), running || !info));
+      menu.appendChild(this.ctxItem('■ 停止容器', true, () => this.actContainer(item.container, 'stop'), !running));
+      menu.appendChild(this.ctxItem('⟳ 重启容器', false, () => this.actContainer(item.container, 'restart'), !running));
+      menu.appendChild(this.ctxItem('✕ 移除组件', true, () => this.removeDockerItem(item)));
+    }
     menu.hidden = false;
     this.ctxTarget = item.id;
     const r = menu.getBoundingClientRect();
@@ -1906,6 +2146,78 @@ const App = {
     }
   },
 
+  /* ---------- NAS 资源一览：总览 / 内存各一枚固定条目，再加上服务端读得到的每一个卷，点一个加一张读数卡 ---------- */
+
+  // 一行对应一张卡：kind 是哪一种，vol 只有卷卡才带
+  resRowState(kind, vol) {
+    const items = (Store.cfg && Store.cfg.docker && Store.cfg.docker.items) || [];
+    const bound = items.some((l) => l.res === kind && (kind !== 'vol' || l.vol === vol));
+    return { bound, cls: 'docker-row' + (bound ? ' bound' : ''), mark: bound ? '已在页面上' : '＋ 加到主页' };
+  },
+
+  paintResCabinet(host, hint) {
+    if (!host) return;
+    const d = Res.data;
+    host.innerHTML = '';
+    if (hint) {
+      hint.textContent = d
+        ? `能加三种读数卡：整台总览、内存、单个卷。这里只列服务端读得到的卷（现在 ${d.volumes.length} 个），想让页面多看见几卷，就在 compose 里给那一卷加一行只读挂载`
+        : Res.problem();
+    }
+    // 一行行铺：固定的两张在前，卷按服务端给的顺序跟在后面
+    const rows = [
+      { kind: 'overview', name: RES_NAME.overview, state: d ? `${d.volumes.length} 卷 · ${(d.disks || []).length} 块盘` : '—', note: d ? `内存 ${fmtPct(d.memory ? (d.memory.used / d.memory.total) * 100 : null)}` : '' },
+      { kind: 'mem', name: RES_NAME.mem, state: d && d.memory ? fmtPct((d.memory.used / d.memory.total) * 100) : '—', note: d && d.memory ? `已用 ${fmtBytes(d.memory.used)} · 共 ${fmtBytes(d.memory.total)}` : '' },
+    ];
+    for (const v of (d && d.volumes) || []) rows.push({ kind: 'vol', vol: v.id, name: v.name, state: fmtPct(v.pct), note: `已用 ${fmtBytes(v.used)} · 共 ${fmtBytes(v.total)}` });
+    for (const r of rows) {
+      const s = this.resRowState(r.kind, r.vol);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = s.cls;
+      // 一种资源只能有一张卡：加过的直接按着，别再摆第二张同样的
+      b.disabled = s.bound;
+      b.dataset.res = r.kind;
+      if (r.vol) b.dataset.vol = r.vol;
+      b.dataset.level = this.resLevel({ res: r.kind, vol: r.vol });
+      b.append(
+        Object.assign(document.createElement('span'), { className: 'docker-name', textContent: r.name }),
+        Object.assign(document.createElement('span'), { className: 'docker-state', textContent: r.state }),
+        Object.assign(document.createElement('span'), { className: 'docker-image', textContent: r.note }),
+        Object.assign(document.createElement('span'), { className: 'docker-mark', textContent: s.mark })
+      );
+      b.addEventListener('click', () => this.useResRow(r.kind, r.vol));
+      host.appendChild(b);
+    }
+  },
+
+  useResRow(kind, vol) {
+    const s = this.resRowState(kind, vol);
+    if (s.bound) return;
+    const v = kind === 'vol' ? Res.volume(vol) : null;
+    const title = kind === 'vol' ? (v ? v.name : vol) : RES_NAME[kind];
+    const size = RES_DEF[kind] || RES_DEF.mem;
+    // 总览卡有几行取决于这台 NAS 上有几个卷、几块盘，出厂高度按当前读到的行数算，别让最后几行被裁掉
+    const rows = kind === 'overview' ? this.resRows({ res: 'overview' }).length : 1;
+    const h = kind === 'overview' ? Math.min(DK_TILE.maxH, Math.max(size.h, rows * 28 + 44)) : size.h;
+    Store.mutate((cfg) => {
+      // 字段顺序照服务端规范化的那一套：可选的空键干脆不写，手改 config.json 才看得清
+      const pos = this.nextDockerPos();
+      const it = { id: uid('l'), title, url: '', icon: '', iconKind: 'letter', desc: '', res: kind, w: size.w, h, x: pos.x, y: pos.y };
+      if (kind === 'vol') it.vol = vol;
+      cfg.docker.items.push(it);
+    });
+    this.renderDockerTiles();
+    this.renderDockerPane();
+    this.toast(`已添加 ${title} 读数卡`, 2600);
+  },
+
+  // 轮询顺手重铺这一列：行数就几行，整列重画比逐格改数字省事，也不会和点击抢 DOM
+  repaintResCabinet() {
+    const host = $('#dkResCabinet');
+    if (host && host.children.length) this.paintResCabinet(host, $('#dkResCabinetHint'));
+  },
+
   async setIconFromUpload(file, link, groupId, intoDraft) {
     if (!isImageFile(file)) return this.toast('只能上传图片文件', 2500, true);
     try {
@@ -2170,6 +2482,7 @@ const App = {
 
   showLogin(msg) {
     Docker.stop();
+    Res.stop();
     this.closeCtxMenu();
     $('#bootScreen').hidden = true;
     $('#sideNav').hidden = true;
@@ -2316,55 +2629,87 @@ const App = {
     const ul = $('#dkTileList');
     if (!ul) return;
     ul.innerHTML = '';
-    // 「加组件」的入口就是这列容器一览，一张组件都还没有时也得画出来
+    // 「加组件」的入口是这两列一览：容器一列、NAS 资源一列，一张组件都还没有时也得画出来
     this.fillDockerCabinet($('#dkCabinet'), 'create', $('#dkCabinetHint'));
+    this.paintResCabinet($('#dkResCabinet'), $('#dkResCabinetHint'));
+    Res.ensure();
     const items = Store.cfg.docker.items || [];
     if (!items.length) {
       const li = document.createElement('li');
       li.className = 'app-head';
-      li.textContent = '还没有容器组件，点上面「容器一览」里的任意一个容器就往主页上加一张。';
+      li.textContent = '还没有组件：点上面「容器一览」里的容器加一张状态卡，点「NAS 资源」里的条目加一张读数卡。';
       ul.appendChild(li);
       Docker.paintAll();
+      this.paintResTiles();
       return;
     }
+    for (const link of items) ul.appendChild(isResource(link) ? this.resRowLi(link) : this.containerRowLi(link));
+    Docker.paintAll();
+    this.paintResTiles();
+  },
+
+  containerRowLi(link) {
     const tag = (attr, text) => {
       const el = document.createElement('span');
       if (attr) el.setAttribute(attr, '');
       el.textContent = text;
       return el;
     };
-    items.forEach((link) => {
-      const li = document.createElement('li');
-      li.className = 'app-row dk-row';
-      // 挂上 data-container / data-cpu / data-mem / data-net，Docker 的轮询就会顺手把这一行也刷了
-      li.dataset.container = link.container;
-      const info = Docker.get(link.container);
-      const dot = document.createElement('i');
-      dot.className = 'stat-dot';
-      const name = document.createElement('strong');
-      name.textContent = link.title;
-      const meta = document.createElement('span');
-      meta.className = 'grow';
-      meta.append(
-        tag(null, `容器 ${link.container}｜`),
-        tag('data-state-text', Docker.stateText(info)),
-        tag(null, ' · CPU '),
-        tag('data-cpu', Docker.value(info, 'cpu')),
-        tag(null, ' · 内存 '),
-        tag('data-mem', Docker.value(info, 'mem')),
-        tag(null, ' · '),
-        tag('data-net', Docker.value(info, 'net'))
-      );
-      const acts = document.createElement('div');
-      acts.className = 'btn-row';
-      acts.append(
-        this.miniBtn('✎', '编辑：名称 / 图标 / 附带网址 / 绑定的容器', () => this.openLinkModal(link, '', true)),
-        this.miniBtn('✕', '移除这张组件（只删主页上的卡片，不动 NAS 上的容器）', () => this.removeDockerItem(link))
-      );
-      li.append(dot, name, meta, acts, this.dkSizeRow(link));
-      ul.appendChild(li);
-    });
-    Docker.paintAll();
+    const li = document.createElement('li');
+    li.className = 'app-row dk-row';
+    // 挂上 data-container / data-cpu / data-mem / data-net，Docker 的轮询就会顺手把这一行也刷了
+    li.dataset.container = link.container;
+    li.dataset.link = link.id;
+    const info = Docker.get(link.container);
+    const dot = document.createElement('i');
+    dot.className = 'stat-dot';
+    const name = document.createElement('strong');
+    name.textContent = link.title;
+    const meta = document.createElement('span');
+    meta.className = 'grow';
+    meta.append(
+      tag(null, `容器 ${link.container}｜`),
+      tag('data-state-text', Docker.stateText(info)),
+      tag(null, ' · CPU '),
+      tag('data-cpu', Docker.value(info, 'cpu')),
+      tag(null, ' · 内存 '),
+      tag('data-mem', Docker.value(info, 'mem')),
+      tag(null, ' · '),
+      tag('data-net', Docker.value(info, 'net'))
+    );
+    const acts = document.createElement('div');
+    acts.className = 'btn-row';
+    acts.append(
+      this.miniBtn('✎', '编辑：名称 / 图标 / 附带网址 / 绑定的容器', () => this.openLinkModal(link, '', true)),
+      this.miniBtn('✕', '移除这张组件（只删主页上的卡片，不动 NAS 上的容器）', () => this.removeDockerItem(link))
+    );
+    li.append(dot, name, meta, acts, this.dkSizeRow(link));
+    return li;
+  },
+
+  // 读数卡的行：名称 + 一串读数 + 移除 + 长宽滑块，没有可编辑的内容（标题跟着资源类型定死）
+  resRowLi(link) {
+    const li = document.createElement('li');
+    li.className = 'app-row dk-row';
+    li.dataset.res = link.res;
+    li.dataset.link = link.id;
+    const dot = document.createElement('i');
+    dot.className = 'stat-dot';
+    const name = document.createElement('strong');
+    name.textContent = link.title;
+    const meta = document.createElement('span');
+    meta.className = 'grow';
+    const lead = document.createElement('span');
+    lead.textContent = `资源 ${RES_NAME[link.res]}｜`;
+    const text = document.createElement('span');
+    text.dataset.resText = '';
+    text.textContent = this.resReadout(link);
+    meta.append(lead, text);
+    const acts = document.createElement('div');
+    acts.className = 'btn-row';
+    acts.append(this.miniBtn('✕', '移除这张读数卡（只是从主页摘掉，NAS 上的东西一点都不会动）', () => this.removeDockerItem(link)));
+    li.append(dot, name, meta, acts, this.dkSizeRow(link));
+    return li;
   },
 
   // 一张组件的长宽：滑块一边拖一边重画那张卡，改完就地存配置。位置不在这里调，去主页长按拖

@@ -43,6 +43,9 @@ const linkHref = (link, mode) => {
 // 带 container（Docker 容器名）的卡片是容器磁贴，不是普通网址卡片
 const isContainer = (link) => Boolean(link && link.container);
 
+// 带 res 的是 NAS 资源组件（内存 / 单个卷 / 总览），跟容器组件同住 docker.items
+const isResource = (link) => Boolean(link && link.res);
+
 const fmtPct = (v) => (v === null || v === undefined ? '—' : v >= 10 ? v.toFixed(0) + '%' : v.toFixed(1) + '%');
 
 const fmtBytes = (n) => {
@@ -139,6 +142,8 @@ const Api = {
   dockerState: () => Api.call('/api/docker/state'),
   dockerContainers: () => Api.call('/api/docker/containers'),
   dockerAction: (name, action) => Api.call('/api/docker/action', { method: 'POST', body: { name, action } }),
+  // NAS 资源读数：内存、每个卷的容量与用量、物理盘型号，服务端只给数字，不给文件
+  systemState: () => Api.call('/api/system/state'),
   uploadImage: async (dataUrl) => {
     const r = await Api.call('/api/media', { method: 'POST', body: { image: dataUrl } });
     return r.urls[0];

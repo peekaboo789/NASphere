@@ -117,6 +117,7 @@ ENV_HEALTH_WAIT="${HEALTH_WAIT:-}"
 ENV_KEEP_BACKUPS="${KEEP_BACKUPS:-}"
 ENV_DOCKER_SOCK="${DOCKER_SOCK:-}"
 ENV_TZ="${TZ:-}"
+ENV_HOST_VOLUMES="${HOST_VOLUMES:-}"
 
 # 安装目录，也允许从环境传进来
 ENV_INSTALL_ROOT="${INSTALL_ROOT:-}"
@@ -546,6 +547,7 @@ DOTENV_HEALTH_WAIT=""
 DOTENV_KEEP_BACKUPS=""
 DOTENV_DOCKER_SOCK=""
 DOTENV_TZ=""
+DOTENV_HOST_VOLUMES=""
 
 if [ -f "$ROOT/.env" ]; then
 
@@ -566,6 +568,7 @@ if [ -f "$ROOT/.env" ]; then
   KEEP_BACKUPS=""
   DOCKER_SOCK=""
   TZ=""
+  HOST_VOLUMES=""
 
   set -a
   # shellcheck disable=SC1090
@@ -583,6 +586,7 @@ if [ -f "$ROOT/.env" ]; then
   DOTENV_KEEP_BACKUPS="$KEEP_BACKUPS"
   DOTENV_DOCKER_SOCK="$DOCKER_SOCK"
   DOTENV_TZ="$TZ"
+  DOTENV_HOST_VOLUMES="$HOST_VOLUMES"
 
 fi
 
@@ -602,6 +606,9 @@ DOCKER_SOCK="${CLI_DOCKER_SOCK:-${ENV_DOCKER_SOCK:-${DOTENV_DOCKER_SOCK:-/var/ru
 # TZ 没有命令行开关，但同样得按 环境变量 > .env > 默认值 排：
 # 上面 source .env 用的是 set -a，不重新算一遍的话 .env 会反过来盖掉环境变量
 TZ="${ENV_TZ:-${DOTENV_TZ:-Asia/Shanghai}}"
+
+# 逐卷用量要挂进来的宿主机目录，同样没有命令行开关（这是一份清单，不是每次都换的参数）
+HOST_VOLUMES="${ENV_HOST_VOLUMES:-${DOTENV_HOST_VOLUMES:-}}"
 
 # 数据目录默认在安装目录里，所以要等 ROOT 定死之后再算
 DATA_DIR="${CLI_DATA_DIR:-${ENV_DATA_DIR:-${DOTENV_DATA_DIR:-$ROOT/data}}}"
@@ -647,6 +654,37 @@ case "$DATA_DIR" in
     ;;
 esac
 
+# 逐卷用量：HOST_VOLUMES 是空格分隔的宿主机目录清单，每一项各挂成 /host/<同名>:ro。
+# 页面只从 /host 那一层数出有几个目录，就列几卷，所以这里唯一的口径就是把目录名摆正。
+EXTRA_MOUNTS=""
+
+for host_vol in $HOST_VOLUMES; do
+
+  case "$host_vol" in
+    /*)
+      ;;
+    *)
+      die "HOST_VOLUMES 里每一项都得是绝对路径（中间不能带空格）：$host_vol"
+      ;;
+  esac
+
+  vol_name="$(basename "$host_vol")"
+
+  # 这个名字会直接写进 compose 的挂载点，也是卡片认卷用的 id，只留字母数字和 . _ -
+  case "$vol_name" in
+    '' | *[!A-Za-z0-9._-]*)
+      die "HOST_VOLUMES 里这一项的目录名页面认不了（只能用字母、数字、点、减号、下划线）：$host_vol"
+      ;;
+  esac
+
+  # 目录不存在时 compose 会替你先建一个空目录挂进来，看着就像一卷空的，所以这里提醒一句
+  [ -d "$host_vol" ] || warn "HOST_VOLUMES 里这个目录现在不存在：$host_vol"
+
+  EXTRA_MOUNTS="${EXTRA_MOUNTS}      - ${host_vol}:/host/${vol_name}:ro
+"
+
+done
+
 # 容器起来之后服务端就会补写 auth.json，首启提示必须在启动前取样
 FIRST_RUN=0
 
@@ -666,6 +704,10 @@ log "容器：compose 项目 $COMPOSE_PROJECT → 容器名 ${COMPOSE_PROJECT}-n
 log "端口：$HOST_PORT → 容器内 $APP_PORT"
 log "数据：$DATA_DIR"
 log "时区：$TZ"
+
+if [ -n "$EXTRA_MOUNTS" ]; then
+  log "逐卷用量：另挂 $(printf '%s' "$EXTRA_MOUNTS" | grep -c .) 卷进 /host（只读）"
+fi
 
 if [ "$FIRST_RUN" = 1 ] && [ "$UNINSTALL" != 1 ]; then
   log "首次启动：账号 admin、密码 admin123（镜像内置默认值）"
@@ -813,7 +855,7 @@ fi
 render_compose() {
 
   printf '# %s，请勿手改：下次部署会整个重写。\n' "$GENERATED_KEY"
-  printf '# 要长期改端口或数据目录，就写在 %s/.env 里的 HOST_PORT / DATA_DIR，然后重跑 ./deploy.sh。\n' "$ROOT"
+  printf '# 要长期改端口、数据目录或多挂几卷读数，就写在 %s/.env 里的 HOST_PORT / DATA_DIR / HOST_VOLUMES，然后重跑 ./deploy.sh。\n' "$ROOT"
   printf '# 镜像来自 GHCR，本机不需要源码，也不需要 Dockerfile。\n'
   printf '\n'
   printf 'services:\n'
@@ -829,6 +871,11 @@ render_compose() {
 
   if [ -S "$DOCKER_SOCK" ]; then
     printf '      - %s:%s\n' "$DOCKER_SOCK" "$DOCKER_SOCK"
+  fi
+
+  # HOST_VOLUMES 里每一项一行只读挂载，主页的「NAS 资源」据此列出对应的卷
+  if [ -n "$EXTRA_MOUNTS" ]; then
+    printf '%s' "$EXTRA_MOUNTS"
   fi
 
   printf '\n'
