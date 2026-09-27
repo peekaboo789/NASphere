@@ -2,7 +2,7 @@
 
 面向第一次把这套装上手的操作手册：按顺序做下来能跑起来，出问题时按后面的章节查。功能层面的说明看 `README.md`，这里只讲部署与运维。
 
-- 版本：`package.json` 的 `version`（当前 `1.0.7`）。`deploy.sh` 里那个默认标签是单独写死的一行（`DEFAULT_TAG`），发新版时跟着改。
+- 版本：`package.json` 的 `version`（当前 `1.0.8`）。`deploy.sh` 里那个默认标签是单独写死的一行（`DEFAULT_TAG`），发新版时跟着改。
 - 镜像：公开发布在 `ghcr.io/peekaboo789/nasphere`，标签同版本。部署路线一律 `docker pull`，**不在 NAS 上构建**。
 - 运行时：单容器，`node:22-alpine`，零 npm 依赖，镜像里只有 `server/` 与 `public/`。
 - 所有状态都在挂载出来的数据目录里，换镜像、重建容器都不丢配置。
@@ -15,7 +15,7 @@
 | --- | --- |
 | 一台能跑 Docker 的 NAS | 群晖 Container Manager / 绿联 UGOS / 威联通 Container Station，或任何有 `docker` 的 Linux 机器 |
 | SSH 或图形终端 | SSH 最省事。只有网页图形界面也能装：在 DSM/UGOS 的 Compose 表单里照 §4 粘 `docker-compose.yml`，卷路径写成绝对路径，套件会自己从 `ghcr.io` 拉镜像；NAS 出不了网才需要 §5 的离线包（导入后按 §4 那两行重标成 compose 里的名字） |
-| 能拉 `ghcr.io` | 三条路线里只有 §5 不需要联网拉镜像。§3 和 §4 都是 `docker pull ghcr.io/peekaboo789/nasphere:1.0.7`，不构建、不下源码，所以也不用管 `node:22-alpine` 那个基础镜像 |
+| 能拉 `ghcr.io` | 三条路线里只有 §5 不需要联网拉镜像。§3 和 §4 都是 `docker pull ghcr.io/peekaboo789/nasphere:1.0.8`，不构建、不下源码，所以也不用管 `node:22-alpine` 那个基础镜像 |
 | CPU 是 x86_64 或 aarch64 | `deploy.sh` 开头就判这个，其余架构直接退出。**注意 ghcr 上目前只有 `linux/amd64` 一份 manifest**，ARM64 机型在线拉会报 `no matching manifest for linux/arm64/v8`，走 §5 的 arm64 离线包（多架构镜像推上来之后这条限制就没了） |
 | 端口没被占用 | 默认对外 `18086`（`deploy.sh --port` 或安装目录 `.env` 里 `HOST_PORT` 可改，手工 compose 就改 `docker-compose.yml` 的 `ports`），容器内固定监听 `18086`。`8080` 常被设备自带服务占用，所以默认值避开它；再冲突就换端口（见 §7） |
 
@@ -66,7 +66,7 @@ chmod 600 .env
 ```bash
 HOST_PORT=18086                 # 对外端口，容器内固定监听 18086
 DATA_DIR=/volume1/docker/nasphere/data   # 数据目录，留空就是 <安装目录>/data
-# TAG=1.1.0                     # 镜像标签，默认 1.0.7
+# TAG=1.1.0                     # 镜像标签，默认 1.0.8
 # IMAGE=ghcr.io/peekaboo789/nasphere   # 用自己的 fork 或内网仓库就改它
 # HOST_VOLUMES=/volume1 /volume2       # 主页的逐卷读数：留空是脚本探这台 NAS 的存储池（根下一层，再往下一层）、每卷各挂一行 /host/<名字>:ro，none 是只挂数据目录（边界见 §12）
 ```
@@ -117,13 +117,13 @@ chmod +x deploy.sh        # 只有你自己把脚本拷进去时才需要
 | `读取 …/.env` | 安装目录里有 `.env` 才打印 |
 | `! …/.env 不会被读取，.env 要放在 <安装目录>/.env 才生效` | 你把 `.env` 留在了执行命令的目录里，而安装目录是别处。搬过去或加 `--root` |
 | `当前用户不在 docker 组，后续 Docker 命令将使用 sudo` | 后续 `docker` 命令自动加 sudo，可能提示输密码，属正常（管道执行输不了密码，见上面的权限说明） |
-| `镜像：ghcr.io/peekaboo789/nasphere:1.0.7` / `取镜像方式：docker pull（本机不需要源码，也不构建）` / `容器：compose 项目 nasphere → 容器名 nasphere-nasphere-1` / `端口：18086 → 容器内 18086` / `数据：…/data` / `时区：Asia/Shanghai` | 生效的参数，优先级是**命令行 > 环境变量 > `.env` > 默认值**；数据目录已转成绝对路径 |
+| `镜像：ghcr.io/peekaboo789/nasphere:1.0.8` / `取镜像方式：docker pull（本机不需要源码，也不构建）` / `容器：compose 项目 nasphere → 容器名 nasphere-nasphere-1` / `端口：18086 → 容器内 18086` / `数据：…/data` / `时区：Asia/Shanghai` | 生效的参数，优先级是**命令行 > 环境变量 > `.env` > 默认值**；数据目录已转成绝对路径 |
 | `首次启动：账号 admin、密码 admin123（镜像内置默认值）` | 部署前 `data/auth.json` 不存在时才打印（取样在容器启动之前，不会被服务端补写文件盖掉） |
 | `! 目录里那份 compose 不是本脚本生成的，已备份到 …/docker-compose.yml.backup-<时间戳>` | 目录里那份 yml 是你手写/从仓库拷来的，覆盖前先留一份。脚本自己生成的那份如果参数没变就只打印 `docker-compose.yml 与本次参数一致，未改动` |
 | `已生成 …/docker-compose.yml` 或 `docker-compose.yml 与本次参数一致，未改动` | compose 每次按本次参数重写，所以 `--port`、`--data-dir` 不会像以前那样被写死的 yml 吞掉 |
 | `没有已有配置，跳过备份` 或 `配置已备份到：<数据目录>/.deploy-backup/<时间戳>` | 升级前的 config/auth 快照，默认留最近 5 份（`KEEP_BACKUPS` 可调） |
 | `已记录旧版本镜像：sha256:abcdef1234` | 回滚锚点，同时另打一个 `<IMAGE>:rollback` 标签（§9）。首次部署没有这一行 |
-| `加载离线 Docker 镜像：…` → `已把包内镜像 local/nasphere:1.0.7 重标为 ghcr.io/peekaboo789/nasphere:1.0.7` | 仅 `--tar`：包里的名字与目标标签不一致时自动重标，走这条就不会去拉 ghcr |
+| `加载离线 Docker 镜像：…` → `已把包内镜像 local/nasphere:1.0.8 重标为 ghcr.io/peekaboo789/nasphere:1.0.8` | 仅 `--tar`：包里的名字与目标标签不一致时自动重标，走这条就不会去拉 ghcr |
 | `! 找不到 Docker Socket：/var/run/docker.sock` + `! NASphere Docker 管理功能将不可用（compose 里那行挂载已经省掉，其余功能照常）` | 宿主机上找不到套接字，跳过挂载——容器组件就没数据，需要的话按 §11 处理 |
 | `拉取 NASphere 镜像：…` | 就是 `docker pull`。失败时按架构给不同提示（ARM64 见上表架构那行），然后 `✕ 镜像没弄到手，部署到此为止；data/ 没有被改动` |
 | `启动 NASphere` → `Container nasphere-nasphere-1  Started` → `等待 NASphere 服务启动（最多 40s）` → `NASphere 安装/更新完成 ✓` + `访问地址：` / `  http://192.168.x.x:18086` | 起容器走的是 `docker compose up -d`；探活打的是免登录的 `/api/health`；最多等 `HEALTH_WAIT` 秒 |
@@ -161,17 +161,25 @@ docker compose logs --tail 30
 
 > yml 里没写 `container_name`，所以容器叫 `<compose 项目名>-nasphere-1`（项目名默认取目录名）。多台机器测试不会被「容器名已存在」顶住；要看是哪台就用 `docker compose ps`，别按名字找。
 
-NAS 到 `ghcr.io` 不通（没网、或被墙）就走 §5 的离线包。包里的名字是 `local/nasphere:1.0.7`，和 compose 写的那个不同名，`load` 完补一步重标，之后 compose 见本地已有同名镜像就不会再去拉：
+NAS 到 `ghcr.io` 不通（没网、或被墙）就走 §5 的离线包。包里的名字是 `local/nasphere:1.0.8`，和 compose 写的那个不同名，`load` 完补一步重标，之后 compose 见本地已有同名镜像就不会再去拉：
 
 ```bash
-docker load -i nasphere-1.0.7-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.7 ghcr.io/peekaboo789/nasphere:1.0.7
+docker load -i nasphere-1.0.8-linux-amd64.tar.gz
+docker tag local/nasphere:1.0.8 ghcr.io/peekaboo789/nasphere:1.0.8
 docker compose up -d
 ```
 
 > ⚠️ ghcr 上目前只有 `linux/amd64` 一份 manifest（没有多架构索引）。ARM 机型（群晖多数是 `arm64/v8`）走在线那条会报 `no matching manifest for linux/arm64/v8`，请用 §5 的 **arm64** 离线包 + 上面那两行 `docker load` / `docker tag`。
 
 要改端口、数据目录或镜像版本，就直接改 `docker-compose.yml` 里那三行写死的值（`image`、`ports` 冒号左边、`volumes` 冒号左边），再 `docker compose up -d`。首启密码这条路线给不进去，容器会用镜像内置的 `admin123`，登录后立刻去「设置 → 安全」改（§6、§12）。
+
+这条路默认只挂 `./data:/app/data` 那一卷，主页也只列这一卷。要逐卷读数，在 `volumes:` 下加一行 `- /volume2:/host/volume2:ro` 就够了；卡片上「挂载点」那一段还要 `environment:` 里再补一行：
+
+```yaml
+      HOST_VOLUME_MAP: 'volume2=/volume2;data=/volume1/docker/nasphere/data'
+```
+
+格式是 `<挂点名>=<宿主机绝对路径>`，几卷之间用分号。容器自己的挂载表只有 `/host/<挂点名>` 那一层，宿主机那一条路径它怎么也看不见，所以这一段只能由写 compose 的人交进来；`deploy.sh` 每次生成 compose 都自动带上（路线 A 不用管）。漏了这一行不影响读数，只是那一行少一段挂载点。
 
 > 这条路和 §3 是二选一：现在两边撞的是**端口**（都默认占宿主机 `18086`，后起的那个报 `port is already allocated`），不再是容器名。切换前先停掉另一边——`deploy.sh` 起的那台用 `cd <安装目录> && docker compose down`，手工那台用 `docker compose down`。`data/` 都不动。
 
@@ -181,14 +189,14 @@ docker compose up -d
 
 ```bash
 # 任何有 Docker 的电脑上
-./make-image.sh                       # → dist/nasphere-1.0.7.tar.gz 和 .sha256
+./make-image.sh                       # → dist/nasphere-1.0.8.tar.gz 和 .sha256
 ssh 你@NAS 'mkdir -p /volume1/docker/NASphere/dist'
-scp dist/nasphere-1.0.7.tar.gz* 你@NAS:/volume1/docker/NASphere/dist/
+scp dist/nasphere-1.0.8.tar.gz* 你@NAS:/volume1/docker/NASphere/dist/
 
 # NAS 上，在安装目录里
 cd /volume1/docker/NASphere
-sha256sum -c dist/nasphere-1.0.7.tar.gz.sha256
-./deploy.sh --tar dist/nasphere-1.0.7.tar.gz
+sha256sum -c dist/nasphere-1.0.8.tar.gz.sha256
+./deploy.sh --tar dist/nasphere-1.0.8.tar.gz
 ```
 
 ### C-2 电脑上也没有 Docker（只要装了 Node）
@@ -228,7 +236,7 @@ node make-image-offline.js --help
 | 配置落盘 | 在页面上改一次外观，约 0.7 秒后 `data/config.json` 的改动就写在磁盘上了（服务端合并后再落一次规范化的结果） |
 | 上传可用 | 设置里上传一张图标，`data/uploads/` 出现随机命名的图片文件（支持 png/jpeg/gif/webp/avif/svg/ico，单张 ≤5MB，整个请求受 `MAX_BODY` 约束） |
 | 容器组件 | 挂了套接字时「容器一览」能列出容器，组件上显示 CPU/内存/上下行，右键能启停；长按组件能拖到主页任意位置，松手后 `docker.items` 里那张的 `x` / `y` 就变了 |
-| NAS 读数卡 | 「NAS 资源」里点「内存」或「NAS 总览」，主页出现带百分比和容量条的卡片，5 秒一档；勾「自定义读数」那张的行，卡上的行立刻跟着增减。`curl` 登录后 `GET /api/system/state` 能拿到 `memory` / `cpu` / `net` / `gpu` / `volumes` / `disks` 六组数字（里面没有任何文件路径、网卡名或文件名）。CPU 与网络是累计计数作差，服务刚起来的第一轮写着「刚开始采样」，第二轮才有数字。挂了一卷只读却没列出，看 §11 那两行 |
+| NAS 读数卡 | 「NAS 资源」里点「内存」或「NAS 总览」，主页出现带百分比和容量条的卡片，5 秒一档；勾「自定义读数」那张的行，卡上的行立刻跟着增减。`curl` 登录后 `GET /api/system/state` 能拿到 `memory` / `cpu` / `net` / `gpu` / `volumes` / `disks` 六组数字（卷那几项带文件系统类型和宿主机挂载点，除此之外里面没有任何文件路径、网卡名或文件名）。CPU 与网络是累计计数作差，服务刚起来的第一轮写着「刚开始采样」，第二轮才有数字。挂了一卷只读却没列出，看 §11 那两行 |
 | 内网 / 外网 | 右上角房子/地球按钮切换后，卡片取的是对应那条网址 |
 | 自动同步 | 另一台设备改完配置，本机约 20 秒内（或重新获得焦点时）弹「配置已更新」 |
 
@@ -252,7 +260,7 @@ cp -a data /volume2/docker/nasphere-data
 
 **一键脚本**：在安装目录里 `./deploy.sh --tag <新版本>`，或者重跑 §3 那条 `curl … | bash`——它认得这个目录（旁边就有脚本生成的 compose），`data/` 原样留下，`.env` 也只读不写。脚本会先把在用的镜像记成回滚锚点、把 `config.json`、`auth.json` 存进 `data/.deploy-backup/`，再 pull 新标签、`docker compose up -d`、探活。
 
-> 不写 `--tag` 就是重跑当前默认标签（`1.0.7`）。ghcr 上同一个标签被重推过时，这次 pull 会拉回新的那份；想让升级有确定的落点，就给每个版本一个新标签。
+> 不写 `--tag` 就是重跑当前默认标签（`1.0.8`）。ghcr 上同一个标签被重推过时，这次 pull 会拉回新的那份；想让升级有确定的落点，就给每个版本一个新标签。
 
 **手工 compose**：NAS 上连项目文件都不用换，把 `docker-compose.yml` 里 `image` 的标签改成新版本，再 `docker compose up -d`（compose 见本地没有这个标签会自己去 ghcr 拉）。ghcr 上标签没变但镜像重推过，就先 `docker compose pull` 再 up。
 
@@ -268,7 +276,7 @@ cp -a data /volume2/docker/nasphere-data
   ```bash
   cd <安装目录>
   docker compose down
-  docker tag ghcr.io/peekaboo789/nasphere:rollback ghcr.io/peekaboo789/nasphere:1.0.7
+  docker tag ghcr.io/peekaboo789/nasphere:rollback ghcr.io/peekaboo789/nasphere:1.0.8
   docker compose up -d
   ```
 
@@ -299,7 +307,7 @@ docker compose up -d        # 或 ./deploy.sh
 
 | 现象 | 先查 | 处置 |
 | --- | --- | --- |
-| `这台机器上没有 docker` | 脚本要求 PATH 里有 docker | 用 Docker 图形套件里的 Compose/项目功能：先弄出 `ghcr.io/peekaboo789/nasphere:1.0.7` 这个镜像（§5 的离线包导入 + §4 那两行重标），再把 §4 那份 `docker-compose.yml` 贴进项目起起来；卷路径写绝对路径。或按 README「本地开发调试」直接跑 `node server/index.js` |
+| `这台机器上没有 docker` | 脚本要求 PATH 里有 docker | 用 Docker 图形套件里的 Compose/项目功能：先弄出 `ghcr.io/peekaboo789/nasphere:1.0.8` 这个镜像（§5 的离线包导入 + §4 那两行重标），再把 §4 那份 `docker-compose.yml` 贴进项目起起来；卷路径写绝对路径。或按 README「本地开发调试」直接跑 `node server/index.js` |
 | `连不上 docker 守护进程` | Docker / Container Manager 没启动；当前用户不在 docker 组 | 启动套件，或 `sudo ./deploy.sh`（脚本自己也会试 sudo） |
 | 一键安装报「没有权限写 …，也用不了免密 sudo」 | 目标目录的父级当前用户写不进去，而 `curl \| bash` 占住了 stdin，sudo 弹密码也输不了 | 整条命令用 root 跑（`curl … \| sudo bash`），或 `bash -s -- --root <你有权限的目录>`，或给当前用户配免密 sudo |
 | `拉取失败：ghcr.io/…`（AMD64 机器） | 这台机器到 `ghcr.io` 不通 | 换台机器 `docker save` 成离线包传上去，`./deploy.sh --tar <包>`；或者整套走 §4 的手工路线 |
@@ -318,15 +326,17 @@ docker compose up -d        # 或 ./deploy.sh
 | 登录后主页空空的 | 是正常状态：首启配置里没有分组 | 按 §6 建第一个分组 |
 | 「NAS 资源」只列出「数据盘」一卷 | `.env` 里写了 `HOST_VOLUMES=none`；或者那一卷坐在脚本会跳过的目录里（根下那一层的 `proc`、`sys`、`dev`、`run`、`usr`、`lib`、`bin`、`sbin`、`etc`、`var`、`tmp`、`snap`、`boot` 这些系统目录，以及 `.hidden` 这种点开头的）；或者它和数据目录在同一块文件系统上（同一块只报一次）。脚本认的是「这一层的挂载点和上一层不同」，不认路径写法 | `.env` 里点名单：`HOST_VOLUMES=/volume1 /volume2` 再重跑脚本；手工 compose 路线在 `volumes:` 下加一行 `- /volume2:/host/volume2:ro`（`deploy.sh` 每次会重写它生成的那份，所以这行加在你手写的版本里最省事）；先想清楚 §12 里那条「挂了就能读内容」的边界 |
 | 已加的卷卡片显示「查不到这个卷」 | 挂载行被删了、目录名对不上（卡片认的是 `/host` 下那一层的名字），或卷和 `/app/data` 在同一文件系统上（同一个盘只报一次） | 补回 / 改对那一行 `:ro` 挂载，或直接把这张卡片撤下（配置不用动） |
-| 硬盘那一行写着「这台机器上没有 /sys/block」 | 容器里看不见宿主机的 sysfs（`/sys` 被挡在外面，或这台机器根本走的是不走 sysfs 的存储栈） | `docker exec <容器> ls /sys/block` 看一眼；被挡就别用 `--pid=host` 之类的隔离开关去改，这页只读文件不读内容 |
+| 卷那一行有容量、没有挂载点那一段 | 这份 compose 没写 `HOST_VOLUME_MAP`（手写 compose 或老版本 `deploy.sh` 生成的那一份），或者里面那串挂点名跟 `/host` 下那一层的名字对不上；认不出的项（路径不是绝对、带控制字符、长过 200 字符）会整条丢掉 | 路线 A 重跑一次 `./deploy.sh` 就带上；路线 B 自己补一行 `HOST_VOLUME_MAP: 'volume2=/volume2'`（§4）。这一行只影响挂载点那一段，容量读数一直是好的 |
+| 硬盘那一行写着「这台机器上没有 /sys/block」 | 容器里看不见宿主机的 sysfs（`/sys` 被挡在外面，或这台机器根本走的是不走 sysfs 的存储栈） | `docker exec <容器> ls /sys/block` 看一眼；被挡就别为了这一行去开 `--pid=host` 之类的隔离开关，读数只要计数器，翻不到卷里的东西是底线 |
 | 硬盘那一行写着「/sys/block 里没有可用的盘」 | 看得见 sysfs，但里面的设备全被排除名单滤掉了（`loop` / `ram` / `zram` / `sr` / `md` / `dm-` 这些都不是裸盘），或者是盘名很怪的存储栈没报 `size` | 宿主机上 `ls /sys/block` 和 `cat /sys/block/<盘>/size` 各看一眼，把结果发出来才好判断该不该放宽名单 |
-| GPU 那一行写着「读不到 GPU 占用（驱动 … · 频率 …）」 | 这块卡的驱动不往 sysfs 写百分比（核显的 i915 最常见，括号里给的就是驱动名和当前 / 峰值频率） | 这一版没有第二种取值来源，只能显示频率；想省地方就把这一行取消勾选 |
+| GPU 那一行有百分比、后面跟着「按核心频率折算（… → … MHz）」 | 这块卡的驱动不往 sysfs 写占用率（飞牛那种 Debian + i915 就是这样），这一格是拿当前频率在停车频率与峰值频率之间的位置折出来的 | 这一行照实标了是折算，不是实测；只想看实测就把 GPU 这行取消勾选，或者换写 `gpu_busy_percent` 的卡（amdgpu、部分 nouveau） |
+| GPU 那一行写着「读不到 GPU 占用（驱动 … · 频率 …）」 | 连停车 / 峰值频率都配不齐，折不出百分比（`gt_RPn` 与 `gt_RP0` 缺一个，或两个相等） | 宿主机上 `ls /sys/class/drm/card0/` 与 `cat /sys/class/drm/card0/gt_*_freq_mhz` 看一眼，把结果发出来才好判断还缺哪一样 |
 
 ## 12. 安全边界（部署时请确认一次）
 
 - **挂了 `docker.sock` 就等于把宿主机 root 交给这个容器**（能起一个挂载宿主 `/` 的容器）。这是 Docker 自身的权限模型，不是页面开关能收窄的：主页账号只给可信的人，**不要把它直接暴露到公网**。不需要容器启停就别挂套接字（`deploy.sh` 只在宿主机真有那个套接字时才挂；不想给就在 compose 里删掉那两行）。
 - 服务本身只放行「配置里点名过的容器」，动作只有启动 / 停止 / 重启；`rm`、`exec` 连接口都没有。
-- **NAS 资源读数卡只取计数器**：内存来自 `/proc/meminfo` 的两个计数，CPU 是 `/proc/stat` 第一行的累计 ticks 与 `/proc/loadavg`，网络是 `/proc/net/dev` 的收发字节（回环、`docker0`、`veth` 不计），显卡先读 `/sys/class/drm/*/device/gpu_busy_percent`，读不到再退到每个引擎的 `busy_percent`（i915 只写后者），两处都没有就在卡片上写驱动名和当前 / 峰值频率，物理盘是 `/sys/block` 里排除掉虚拟设备之后剩下的设备名 / 型号 / 块数，卷用量是对目录本身调一次 `statfs()`（bind mount 抄的是宿主超级块，所以拿到的就是宿主机那一卷的账），卷的文件系统类型读自 `/proc/self/mountinfo` 那一行的类型字段——`overlay`、`tmpfs`、`proc` 这类虚拟文件系统在这一头被滤掉，`btrfs` / `ext4` / `xfs` / `zfs` / `nfs` / `cifs` 全留着。这些来源都给不出一个文件名，接口返回里也没有挂载路径和网卡名。**代价在卷那一头**：容器默认就能看见数据目录那一卷；`deploy.sh` 每次部署还会探一遍存储池（根下一层，再往下一层，不假定深度），把探到的每一卷各写一行 `- /volume2:/host/volume2:ro` 进它生成的 compose（`/host` 下面那一层的名字撞车时会带上上一层），于是**容器进程技术上能读那些卷里的文件内容**，哪怕页面只显示数字。不接受这条就把 `HOST_VOLUMES=none` 写进 `.env` 重跑，只留数据目录那一卷。
+- **NAS 资源读数卡只取计数器**：内存来自 `/proc/meminfo` 的两个计数，CPU 是 `/proc/stat` 第一行的累计 ticks 与 `/proc/loadavg`，网络是 `/proc/net/dev` 的收发字节（回环、`docker0`、`veth` 不计），显卡在这一张卡的 sysfs 子树里只认几个文件名（`gpu_busy_percent`、各引擎的 `busy_percent`、`gt_*freq_mhz` 那三档频率；`subsystem` / `driver` / `drm` 这几个会指回别处的链接不跟），谁写就用谁，只写频率的那一档按停车频率→峰值频率折成百分比并在行上标明是折算的，物理盘是 `/sys/block` 里排除掉虚拟设备之后剩下的设备名 / 型号 / 块数，卷用量是对目录本身调一次 `statfs()`（bind mount 抄的是宿主超级块，所以拿到的就是宿主机那一卷的账），卷的文件系统类型读自 `/proc/self/mountinfo` 那一行的类型字段——`overlay`、`tmpfs`、`proc` 这类虚拟文件系统在这一头被滤掉，`btrfs` / `ext4` / `xfs` / `zfs` / `nfs` / `cifs` 全留着。这些来源都给不出一个文件名，接口里也不会冒出一个网卡名。挂载表这一头只取类型和第三栏那个设备号：它的来源栏（`/dev/sda1` 这种）和子路径都不出口，页面上出现的盘与分区名是 sysfs 里的节点名（`sda`、`sda2`、`md0`），不带 `/dev/` 前缀——容器里的 `/dev` 根本没有宿主机的设备节点，写上前缀等于编一条不存在的路径。卷那一行末尾的宿主机挂载点同样不来自挂载表（容器里那份只有 `/host/<挂点名>`），是 `deploy.sh` 顺手写进 `HOST_VOLUME_MAP` 交进来的；没这一行就是空串，页面那段跟着省掉。**代价在卷那一头**：容器默认就能看见数据目录那一卷；`deploy.sh` 每次部署还会探一遍存储池（根下一层，再往下一层，不假定深度），把探到的每一卷各写一行 `- /volume2:/host/volume2:ro` 进它生成的 compose（`/host` 下面那一层的名字撞车时会带上上一层），于是**容器进程技术上能读那些卷里的文件内容**，哪怕页面只显示数字。不接受这条就把 `HOST_VOLUMES=none` 写进 `.env` 重跑，只留数据目录那一卷。
 - 未内置 HTTPS。公网入口请放反向代理（Nginx / Caddy / Traefik）后做 TLS，并强烈建议再套一层认证（Cloudflare Access / Tailscale / 群晖反向代理认证）。
 - 未登录能拿到的只有页面外壳（`/`、`/css`、`/js`）、`/api/health` 和登录接口；配置数据与上传图片一律 401（例外见 §13 表格）。所以门禁的全部价值就是那一道登录，公网直挂前请自行评估。
 - **三条部署路线的首启密码都是镜像内置的 `admin` / `admin123`**（`deploy.sh` 以前那套随机初始密码已经去掉了——脚本不再有源码和本机 build，密码也没地方写进 `.env`）。也就是说「装完立刻改密码」从建议变成了必须做的一步，尤其是还挂着 `docker.sock` 的时候。想在首次启动前就定死密码，只有 §13 的 `docker run -e NAV_PASSWORD=…` 那条路。
@@ -354,13 +364,13 @@ docker exec nasphere-nasphere-1 env | grep -E 'PORT|DATA_DIR|DOCKER_HOST|TZ'
 node server/index.js
 
 # 唯一能在首启前定死密码的路线
-docker pull ghcr.io/peekaboo789/nasphere:1.0.7
+docker pull ghcr.io/peekaboo789/nasphere:1.0.8
 docker run -d --name nasphere-manual --restart unless-stopped \
   -p 18086:18086 \
   -e NAV_USER='admin' -e NAV_PASSWORD='你自己的强密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.7
+  ghcr.io/peekaboo789/nasphere:1.0.8
 
 # 探活与门禁
 curl -s http://127.0.0.1:18086/api/health                                # {"ok":true,...}
@@ -379,6 +389,6 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18086/api/config   # �
 | `/api/health` | 免登录探活，部署脚本打的就是它 |
 | `/`、`/css`、`/js` | 页面外壳与静态资源，公开可取（里面不含任何配置数据，分组/壁纸要登录后经 `/api/config` 才拿得到） |
 | `/api/config`、`/media/*` | 未登录一律 401。唯一例外：登录页当前当背景用的那张壁纸（否则登录页自己就没图），详见 README 的登录背景说明 |
-| `/api/system/state` | NAS 资源读数卡的来源，同样要登录。返回体里只有内存与 CPU 的字节数/百分比/负载、网卡收发速率、显卡百分比、各卷的字节数与百分比加一个文件系统类型名、盘的设备名+型号+容量，没有文件路径、挂载路径和文件名，网卡名也不给 |
+| `/api/system/state` | NAS 资源读数卡的来源，同样要登录。返回体里是内存与 CPU 的字节数/百分比/负载、网卡收发速率（按网卡计数给，不写网卡名）、显卡百分比、各卷的字节数与百分比 + 文件系统类型 + 宿主机挂载点 + 落在的 sysfs 节点名、盘的设备名+型号+容量。全篇没有一个文件名，也没有挂载表里的来源栏 |
 
 CSP（`Content-Security-Policy`）只挂在 `/api/config` 的响应上，命令行 `curl http://127.0.0.1:18086/` 是看不到的；要确认就在浏览器 DevTools 的 Network 里看登录后那条 `GET /api/config`。

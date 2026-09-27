@@ -959,11 +959,15 @@ function dockerAct(name, action) {
      · 内存取 /proc/meminfo 的两个计数，读不到就用 os 模块给的同一份统计
      · CPU / 负载取 /proc/stat 第一行与 /proc/loadavg，都是累计计数，跟上一次采样作差
      · 网络取 /proc/net/dev 的收发字节，同样作差成速率；回环和 Docker 自己的网桥不算
-     · 核显只读 /sys/class/drm 下每张 card 的 device/gpu_busy_percent，驱动不写这一项就如实报读不到
+     · 核显在 /sys/class/drm 每张 card 的子树里认那几个文件名（gpu_busy_percent / busy_percent / 频率三档），
+       驱动只写频率时按 RPn→RP0 折算成百分比，并在行上写明这一格是折算的
      · 物理盘取 /sys/block 的目录名、size 与 device/model，那里只有型号和大小，从来不是路径
      · 盘上「用了多少」是拿 /proc/self/mountinfo 第三栏的设备号对上 /sys/block/<盘>/<分区>/dev 归过去的，
-       全程只比数字串，挂载点路径与 /dev 名字都不出口
+       全程只比数字串；对上之后出口的是 sysfs 里那个节点名（sda、sda2、md0），不是 /dev/ 打头的那串路径——
+       容器里的 /dev 根本没有宿主机的设备节点，写了等于编一个
      · 每个卷只对目录本身调一次 statfs：那是整个文件系统的账，返回里不会出现一个文件名
+     · 卷卡片上的挂载点写的是宿主机那一条路径，而那一条只有生成 compose 的 deploy.sh 知道（容器里的挂载表
+       只看得到 /host/<id>），由它写进 HOST_VOLUME_MAP 交进来；没给就空着，页面那段跟着省掉
    候选卷 = 数据目录 + 挂进来的 /host 第一层目录。宿主机没挂进来的目录在容器里本来就不存在，
    所以 deploy.sh 每探到一卷就往 compose 里写一行只读挂载，页面自己就多出一张卷卡片，这里不需要配开关。 */
 
@@ -978,6 +982,31 @@ const DISK_SKIP = /^(?:loop|ram|zram|sr|md|dm-|nbd|fd|live|dat|bgvt|ubi|mtd)/;
 const SECTOR = 512;
 
 const sysPath = (...parts) => path.join(SYS_ROOT, ...parts);
+
+/* 卷在宿主机上真实挂在哪条路径：容器里的挂载表只有 /host/<挂点名>，宿主那一条从来看不见，
+   所以由写 compose 的那一方（deploy.sh 自动探卷，手写 compose 的人自己填）交进来。
+   格式是 `<挂点名>=<宿主机绝对路径>`，几卷之间用分号隔开。挂点名先过 VOL_ID_RE，路径要求绝对、
+   不带控制字符、最长 200，认不出的那一条整条丢掉——这一串是要出现在页面上的，不能照单全收。 */
+const HOST_MOUNT_RE = /^\/[^\u0000-\u001f\u007f]{0,199}$/;
+const HOST_MAP_MAX = 64;
+
+function hostMountMap() {
+  const out = new Map();
+  for (const part of String(process.env.HOST_VOLUME_MAP || '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const id = part.slice(0, eq);
+    if (!VOL_ID_RE.test(id)) continue;
+    // 只把结尾和中间重复的斜杠收一下：宿主机路径里没有八进制转义那一套，别拿挂载表的读法套它
+    const p = part.slice(eq + 1).replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+    if (!HOST_MOUNT_RE.test(p)) continue;
+    out.set(id, p);
+    if (out.size >= HOST_MAP_MAX) break;
+  }
+  return out;
+}
+
+const HOST_MOUNTS = hostMountMap();
 
 function readSysText(rel) {
   try {
@@ -1003,7 +1032,9 @@ function readSysDir(rel) {
 }
 
 /* 盘对到用量上靠的是设备号：/proc/self/mountinfo 第三栏写的「主:次」，和 /sys/block/<盘>/<分区>/dev
-   写的是同一个字符串（两边都由内核自己格式化，没有编码口径的问题）。拿它当线索，接口里就不用出现挂载点。 */
+   写的是同一个字符串（两边都由内核自己格式化，没有编码口径的问题）。拿它当线索，卷那一行才知道自己落在
+   哪块盘、哪个分区上。这张表只认「设备号 + 容器里的路径 + 文件系统类型」三项，那一行写的来源（/dev/…）
+   与子路径都不出口；页面上的挂载点是宿主机那一条路径，来自上面那份 HOST_VOLUME_MAP。 */
 const CI_PATH = process.platform === 'win32';
 
 function normPath(p) {
@@ -1059,26 +1090,29 @@ function mountOfDir(mounts, dir) {
   return hit ? { dev: hit.dev, fs: hit.fs } : { dev: '', fs: '' };
 }
 
-/* 设备号 → 这个文件系统落在哪几块物理盘上。
+/* 设备号 → 这个文件系统落在哪几块物理盘上、sysfs 里那个节点叫什么。
    sysfs 的规矩是分区目录坐在它那块盘的目录底下（sda/sda1、nvme0n1/nvme0n1p1、md127/md127p1），
    所以「哪块盘的分区」按目录归属认，不拿名字猜前缀——群晖那种 sata1 和 sata12 摆在一起时前缀会认错。
-   md / dm- 这类叠出来的设备自己不存数据，往下翻成员（RAID1 会翻出两块盘，那份用量是整组的）。 */
-function blockOwnersByDev() {
+   md / dm- 这类叠出来的设备自己不存数据，往下翻成员（RAID1 会翻出两块盘，那份用量是整组的）。
+   卷和硬盘两处共用这一份索引：一次采样只扫一遍 /sys/block。 */
+function blockIndex() {
   const names = readSysDir(path.join('sys', 'block'));
   if (!names.length) return null;
   const isDisk = new Set(names.filter((n) => !DISK_SKIP.test(n)));
   const childOf = new Map();
   const byDev = new Map();
-  const put = (dev, list) => {
-    if (dev && list && list.length && !byDev.has(dev)) byDev.set(dev, list);
+  // node 是带着这个文件系统的那个 sysfs 名字（整盘就是盘名自己），device 只在成员归到唯一一块盘时才有
+  const put = (dev, list, node) => {
+    if (byDev.has(dev) || !dev || !list || !list.length) return;
+    byDev.set(dev, { owners: list, node, device: list.length === 1 ? list[0] : '' });
   };
   for (const n of names) {
     const here = path.join('sys', 'block', n);
-    if (isDisk.has(n)) put(devFile(path.join(here, 'dev')), [n]);
+    if (isDisk.has(n)) put(devFile(path.join(here, 'dev')), [n], n);
     for (const k of readSysDir(here)) {
       if (!k.startsWith(n) || !/^p?\d+$/.test(k.slice(n.length))) continue;
       childOf.set(k, n);
-      if (isDisk.has(n)) put(devFile(path.join(here, k, 'dev')), [n]);
+      if (isDisk.has(n)) put(devFile(path.join(here, k, 'dev')), [n], k);
     }
   }
   const ownersOf = (node, depth, seen) => {
@@ -1095,18 +1129,18 @@ function blockOwnersByDev() {
     // md 那类老结构没有 slaves，成员写在 md/dev-xxx/block/dev 里，记的还是设备号
     for (const d of readSysDir(path.join('sys', 'block', node, 'md'))) {
       const hit = byDev.get(devFile(path.join('sys', 'block', node, 'md', d, 'block', 'dev')));
-      if (hit) for (const x of hit) out.add(x);
+      if (hit) for (const x of hit.owners) out.add(x);
     }
     return out;
   };
   for (const n of names) {
     if (isDisk.has(n)) continue;
-    put(devFile(path.join('sys', 'block', n, 'dev')), [...ownersOf(n, 0, new Set())]);
+    put(devFile(path.join('sys', 'block', n, 'dev')), [...ownersOf(n, 0, new Set())], n);
   }
   // 叠出来的设备自己也可能分了区（md127p1），成员跟它的父节点一样
   for (const [child, parent] of childOf) {
     if (isDisk.has(parent)) continue;
-    put(devFile(path.join('sys', 'block', parent, child, 'dev')), [...ownersOf(child, 0, new Set())]);
+    put(devFile(path.join('sys', 'block', parent, child, 'dev')), [...ownersOf(child, 0, new Set())], child);
   }
   return byDev;
 }
@@ -1247,15 +1281,29 @@ function readNet() {
   return { down, up, warming };
 }
 
-/* 各家驱动写占用的地方不一样，按「谁写得最准」依次试：
-   ① device/gpu_busy_percent —— amdgpu 与部分 nouveau 才有
-   ② 引擎目录下的 busy_percent —— i915 那一套（gt/gt0/rcs0/busy_percent），几个引擎取最大的：
-      一块显卡只要有一个引擎在忙就是忙，求平均会把正在转码的机器报成闲着
-   ③ 两处都没有：退回驱动名与核心频率，让卡片说得出「为什么没有占用」，而不是甩一句读不到 */
-const GT_ROOTS = ['', 'gt', 'gt/gt0', 'gt0', 'device/gt', 'device/gt/gt0'];
-const GT_ENG_RE = /^[a-z]{2,4}\d+$/;
-const GT_CUR = ['gt_cur_freq_mhz', 'gt/gt_cur_freq_mhz', 'gt/gt0/gt_cur_freq_mhz'];
-const GT_MAX = ['gt_max_freq_mhz', 'gt/gt_max_freq_mhz', 'gt/gt0/gt_max_freq_mhz'];
+/* 各家驱动把占用率写在不一样的地方，而且这套布局跟着内核版本换名字（i915 是 gt/gt0/rcs0，xe 是 render0/copy0，
+   amdgpu 直接写在 device 下），所以这里不写死路径：在这一张卡的 sysfs 子树里认文件名。
+   ① gpu_busy_percent —— 写在这一项的驱动（amdgpu、部分 nouveau）读到就用
+   ② busy_percent     —— 每个引擎一份，取最大的：一块显卡只要有一个引擎在忙就是忙，求平均会把正在转码的机器报成闲着
+   ③ 两处都没有（飞牛那种 Debian + i915 就是这一档）：只剩频率可看。RPn 是停车频率、RP0 是峰值，
+      当前频率落在这两点之间哪儿就是这块核显有多忙，折算出来的数在行上写明是折算的
+   ④ 连频率都配不齐：把驱动名与能读到的频率写进 note，让卡片说得出卡在哪一步，而不是甩一句读不到 */
+const GPU_DIRECT = 'gpu_busy_percent';
+const GPU_ENGINE = 'busy_percent';
+const GPU_ACT_NAMES = ['gt_act_freq_mhz', 'rps_act_freq_mhz', 'gt_cur_freq_mhz', 'rps_cur_freq_mhz'];
+const GPU_FLOOR_NAMES = ['gt_RPn_freq_mhz', 'rps_RPn_freq_mhz', 'gt_min_freq_mhz', 'rps_min_freq_mhz'];
+const GPU_TOP_NAMES = ['gt_RP0_freq_mhz', 'rps_RP0_freq_mhz', 'gt_max_freq_mhz', 'rps_max_freq_mhz'];
+const GPU_NAME_ROLE = new Map();
+for (const n of GPU_ACT_NAMES) GPU_NAME_ROLE.set(n, 'act');
+for (const n of GPU_FLOOR_NAMES) GPU_NAME_ROLE.set(n, 'floor');
+for (const n of GPU_TOP_NAMES) GPU_NAME_ROLE.set(n, 'top');
+GPU_NAME_ROLE.set(GPU_DIRECT, 'direct');
+GPU_NAME_ROLE.set(GPU_ENGINE, 'engine');
+/* sysfs 里这几个名字会把路径指回别处：subsystem 指向整个 drm 类、driver 指向模块、drm 指回 card 本身。
+   跟着走会把别的显卡写的数当成这一块卡的，所以走到这一层就停。 */
+const GPU_WALK_STOP = new Set(['subsystem', 'driver', 'drm', 'power', 'firmware_node', 'physical_node', 'msi_bus']);
+const GPU_WALK_DEPTH = 4;
+const GPU_WALK_DIRS = 160;
 
 function readDriverName(card) {
   try {
@@ -1265,19 +1313,50 @@ function readDriverName(card) {
   }
 }
 
-// 频率只有 i915 那套 sysfs 有，成对读才有意义：单看当前频率说明不了什么
-function readGtFreq(rel) {
-  let cur = NaN;
-  let max = NaN;
-  for (const p of GT_CUR) {
-    const v = Number(readSysText(rel(p)));
-    if (v > 0) { cur = v; break; }
+/* 一张卡的子树扫一遍，只碰 GPU_NAME_ROLE 里那几个名字，其余文件一个字节都不读。
+   目录判定必须 isDirectory() || isSymbolicLink()：sysfs 里 card 到 device 这一路整个是符号链接，
+   只看 isDirectory() 会把整棵子树滤成空（跟 /sys/block 那次是同一个坑）。 */
+function scanGpuCard(cardRel) {
+  const hit = { direct: null, engines: [], freq: {} };
+  const queue = [[cardRel, 0]];
+  let dirs = 0;
+  while (queue.length && dirs < GPU_WALK_DIRS) {
+    const [rel, depth] = queue.shift();
+    dirs += 1;
+    let ents;
+    try {
+      ents = fs.readdirSync(sysPath(rel), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of ents) {
+      const role = GPU_NAME_ROLE.get(e.name);
+      if (role) {
+        // 空串先拦下：Number('') 是 0，没写这一项的驱动会被报成「占用 0%」，比报读不到更糟
+        const raw = readSysText(path.join(rel, e.name));
+        const v = raw === '' ? NaN : Number(raw);
+        if (Number.isFinite(v)) {
+          if (role === 'direct') hit.direct = hit.direct === null ? v : Math.max(hit.direct, v);
+          else if (role === 'engine') hit.engines.push(v);
+          else if (hit.freq[role] === undefined) hit.freq[role] = v;
+        }
+      }
+      if (depth >= GPU_WALK_DEPTH) continue;
+      if (GPU_WALK_STOP.has(e.name)) continue;
+      if (e.isDirectory() || e.isSymbolicLink()) queue.push([path.join(rel, e.name), depth + 1]);
+    }
   }
-  for (const p of GT_MAX) {
-    const v = Number(readSysText(rel(p)));
-    if (v > 0) { max = v; break; }
-  }
-  return Number.isFinite(cur) && Number.isFinite(max) && max > 0 ? { cur, max } : null;
+  return hit;
+}
+
+// RPn 是停车频率、RP0 是峰值：两端齐了才折得出百分比，缺任何一端就老实说没有占用率
+function gpuFromFreq(freq, driver) {
+  const act = freq.act;
+  const floor = freq.floor;
+  const top = freq.top;
+  if (!Number.isFinite(act) || !Number.isFinite(floor) || !Number.isFinite(top) || top <= floor) return null;
+  const used = Math.min(100, Math.max(0, Math.round(((act - floor) / (top - floor)) * 100)));
+  return { used, note: (driver ? driver + ' 不写占用率，' : '') + `按核心频率折算（${floor}→${top} MHz）` };
 }
 
 function readGpu() {
@@ -1292,49 +1371,33 @@ function readGpu() {
   }
   if (!cards.length) return { used: null, note: '这台机器的 drm 里没有显卡设备' };
   let driver = '';
+  let est = null;
   let freq = null;
   for (const n of cards) {
-    const rel = (...p) => path.join('sys', 'class', 'drm', n, ...p);
-    const raw = readSysText(rel('device', 'gpu_busy_percent'));
-    // 空串得先拦下来：Number('') 是 0，那样没写这一项的驱动会被报成「占用 0%」，比报读不到更糟
-    if (raw) {
-      const v = Number(raw);
-      if (Number.isFinite(v)) return { used: Math.min(100, Math.max(0, v)), note: '' };
-    }
-    for (const root of GT_ROOTS) {
-      let engs;
-      try {
-        engs = fs.readdirSync(sysPath('sys', 'class', 'drm', n, ...root.split('/')));
-      } catch {
-        continue;
-      }
-      const vals = [];
-      for (const e of engs) {
-        if (!GT_ENG_RE.test(e)) continue;
-        const t = readSysText(rel(root, e, 'busy_percent'));
-        if (!t) continue;
-        const v = Number(t);
-        if (Number.isFinite(v)) vals.push(v);
-      }
-      if (vals.length) return { used: Math.min(100, Math.round(Math.max(...vals))), note: '' };
-    }
+    const hit = scanGpuCard(path.join('sys', 'class', 'drm', n));
+    if (hit.direct !== null) return { used: Math.min(100, Math.max(0, Math.round(hit.direct))), note: '' };
+    if (hit.engines.length) return { used: Math.min(100, Math.max(0, Math.round(Math.max(...hit.engines)))), note: '' };
     if (!driver) driver = readDriverName(n);
-    if (!freq) freq = readGtFreq(rel);
+    const f = hit.freq;
+    if (!est) est = gpuFromFreq(f, readDriverName(n));
+    if (!freq && Number.isFinite(f.act) && Number.isFinite(f.top) && f.top > 0) freq = { cur: f.act, max: f.top };
   }
+  if (est) return est;
   const bits = [];
   if (driver) bits.push('驱动 ' + driver + ' 不写占用率');
   if (freq) bits.push(`当前 ${freq.cur} / 峰值 ${freq.max} MHz`);
   return { used: null, note: bits.join(' · ') || '没有驱动写占用率' };
 }
 
-function readDisks(vols, noMountinfo) {
+function readDisks(vols, noMountinfo, index) {
   const names = readSysDir(path.join('sys', 'block'));
   if (!names.length) return { disks: [], note: '这台机器上没有 /sys/block' };
   // 每卷的账按设备号归到盘上：一块文件系统摊在几块盘上（镜像、阵列），这几块盘各记一次整组的账
-  const byDev = blockOwnersByDev();
+  const byDev = index;
   const tally = new Map();
   for (const v of vols) {
-    const owners = v.dev && byDev ? byDev.get(v.dev) : null;
+    const hit = v.dev && byDev ? byDev.get(v.dev) : null;
+    const owners = hit ? hit.owners : null;
     if (!owners) continue;
     for (const d of owners) {
       const t = tally.get(d) || { used: 0, total: 0, avail: 0, shared: false };
@@ -1380,7 +1443,7 @@ function readDisks(vols, noMountinfo) {
 }
 
 // 目录 → 整个文件系统的容量账；statfs 只看目录本身，不碰里面的内容
-function readVolume(id, name, dir, mounts, fromHost) {
+function readVolume(id, name, dir, mounts, fromHost, index) {
   let st;
   let dev;
   try {
@@ -1405,13 +1468,28 @@ function readVolume(id, name, dir, mounts, fromHost) {
   if (!(unit > 0) || !(total > 0)) return null;
   const used = Math.max(0, (st.blocks - st.bfree) * unit);
   const pct = Math.min(100, Math.max(0, (used / total) * 100));
-  // 挂载点路径不给前端：那一串字符对页面没用，接口里留纯数字、名字和文件系统类型
-  const vol = { id, name, fs: at.fs, total, used, avail: st.bavail * unit, pct: Math.round(pct * 10) / 10 };
+  // 这一卷的文件系统落在哪个节点上：整盘就是盘名自己（没有分区表那种摆法），叠出来的设备只有成员不止一块盘时
+  // 才说不清该归谁，两种情况都把 device 留空——宁可行上少一段字，也别编一个对不上的盘名出来
+  const at2 = at.dev && index ? index.get(at.dev) : null;
+  const vol = {
+    id,
+    name,
+    fs: at.fs,
+    // 宿主机那一条路径，没交给容器就是空串，页面那段跟着省掉；不拿 /host/xxx 冒充宿主路径
+    mount: HOST_MOUNTS.get(id) || '',
+    device: at2 ? at2.device : '',
+    partition: at2 && at2.node !== at2.device ? at2.node : '',
+    total,
+    used,
+    avail: st.bavail * unit,
+    pct: Math.round(pct * 10) / 10,
+  };
   return { dev, devId: at.dev, vol };
 }
 
 function readVolumes() {
   const mounts = mountTable();
+  const index = blockIndex();
   // 挂进来的存储池排在前面：数据目录十有八九就躺在某一卷里面，同一块文件系统该留池子的名字，
   // 而不是留「数据盘」这个只对这台容器有意义的叫法
   const candidates = [];
@@ -1430,7 +1508,7 @@ function readVolumes() {
   const seen = new Set();
   const out = [];
   for (const c of candidates) {
-    const hit = readVolume(c.id, c.name, c.dir, mounts, c.host);
+    const hit = readVolume(c.id, c.name, c.dir, mounts, c.host, index);
     if (!hit) continue;
     // 同一个文件系统只报一次：数据目录常常就摆在某一卷里面
     if (hit.dev) {
@@ -1439,18 +1517,19 @@ function readVolumes() {
     }
     out.push(hit);
   }
-  return { hits: out, noMountinfo: !mounts };
+  return { hits: out, noMountinfo: !mounts, index };
 }
 
 const sysCache = ttlCache(SYS_TTL, SYS_TTL);
 
 function systemState() {
   return sysCache.load(() => {
-    // 卷要先读：硬盘那一行的已用与百分比是从每卷的文件系统账按设备号归过去的
+    // 卷要先读：硬盘那一行的已用与百分比是从每卷的文件系统账按设备号归过去的，两边共用同一份 sysfs 索引
     const vols = readVolumes();
     const disks = readDisks(
       vols.hits.map((h) => ({ dev: h.devId, ...h.vol })),
-      vols.noMountinfo
+      vols.noMountinfo,
+      vols.index
     );
     return {
       ok: true,

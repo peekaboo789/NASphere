@@ -242,6 +242,18 @@ function usageOf(compact, total, used, avail, tail) {
   };
 }
 
+/* 卷那一行后面的两段补充：文件系统类型 + 宿主机上的挂载点。挂载点只有安装脚本把它交进来才有
+   （容器里的挂载表只看得到 /host/<挂点名>），没有就只写类型——不拿容器里那一条冒充宿主机路径。 */
+function volTail(v) {
+  return [v.fs, v.mount].filter(Boolean).join(' · ');
+}
+
+// 悬停那句再多带一层来路：这一卷的文件系统落在哪个块设备节点上（分区、整盘、md / dm 都算）
+function volTip(v) {
+  const node = v.partition || v.device;
+  return [v.name, volTail(v), node].filter(Boolean).join(' · ');
+}
+
 // 一块盘的一行：认得出它上面的文件系统就跟卷一样画已用 / 剩余 / 百分比，认不出就退回只报容量并说明为什么
 function diskLine(rk, x, compact) {
   const k = x.model || x.name;
@@ -278,19 +290,20 @@ function resRowOf(key, d, compact) {
     const g = d.gpu || {};
     // 服务端会带回「为什么没有」——驱动名与频率这类线索写在行上，比一句读不到有用
     if (!resHas(g.used)) return [{ rk: 'gpu', k: 'GPU', note: '读不到 GPU 占用' + (g.note ? '（' + g.note + '）' : '') }];
-    return [{ rk: 'gpu', k: 'GPU', pct: g.used, note: compact ? '' : '显卡占用' }];
+    // 服务端给的这一格是按频率折算时，那句说明必须跟着画出来（窄卡上也是），不然估算会被当成实测
+    return [{ rk: 'gpu', k: 'GPU', pct: g.used, note: g.note || (compact ? '' : '显卡占用') }];
   }
   if (key === 'vols' || key === 'disks') {
     const list = (key === 'vols' ? d.volumes : d.disks) || [];
     if (!list.length) return [{ rk: key, k: key === 'vols' ? '存储卷' : '硬盘', note: (key === 'disks' && d.diskNote ? d.diskNote : '读不到') }];
     return key === 'vols'
-      ? list.map((v) => ({ rk: 'vol:' + v.id, k: v.name, ...usageOf(compact, v.total, v.used, v.avail, v.fs) }))
+      ? list.map((v) => ({ rk: 'vol:' + v.id, k: v.name, tip: volTip(v), ...usageOf(compact, v.total, v.used, v.avail, volTail(v)) }))
       : list.map((x) => diskLine('disk:' + x.name, x, compact));
   }
   const id = key.slice(key.indexOf(':') + 1);
   if (key.startsWith('vol:')) {
     const v = ((d.volumes || []).find((x) => x.id === id)) || null;
-    return [v ? { rk: key, k: v.name, ...usageOf(compact, v.total, v.used, v.avail, v.fs) } : { rk: key, k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
+    return [v ? { rk: key, k: v.name, tip: volTip(v), ...usageOf(compact, v.total, v.used, v.avail, volTail(v)) } : { rk: key, k: id || '没选卷', note: '查不到这个卷（没挂进容器就读不到）' }];
   }
   if (key.startsWith('disk:')) {
     const x = ((d.disks || []).find((y) => y.name === id)) || null;
@@ -741,6 +754,8 @@ const App = {
       const pct = Number.isFinite(r.pct) ? r.pct : null;
       const row = document.createElement('span');
       row.className = 'dk-res-row';
+      // 卡片窄，卷那一行的挂载点与落到的块设备只写在悬停里
+      if (r.tip) row.title = r.tip;
       row.dataset.level = pct === null ? 'flat' : pct >= RES_FULL ? 'full' : pct >= RES_WARN ? 'warn' : 'ok';
       const top = document.createElement('span');
       top.className = 'dk-res-top';
@@ -2413,7 +2428,7 @@ const App = {
       { kind: 'mem', name: RES_NAME.mem, state: fmtPct(memPct), note: d && d.memory ? usageOf(false, d.memory.total, d.memory.used, d.memory.avail).note : '' },
       { kind: 'custom', name: RES_NAME.custom, state: `${RES_CUSTOM_DEFAULT.length} 行`, note: '默认 ' + RES_CUSTOM_DEFAULT.map((k) => resMetricLabel(k)).join(' / ') },
     ];
-    for (const v of (d && d.volumes) || []) rows.push({ kind: 'vol', vol: v.id, name: v.name, state: fmtPct(v.pct), note: usageOf(false, v.total, v.used, v.avail, v.fs).note });
+    for (const v of (d && d.volumes) || []) rows.push({ kind: 'vol', vol: v.id, name: v.name, tip: volTip(v), state: fmtPct(v.pct), note: usageOf(false, v.total, v.used, v.avail, volTail(v)).note });
     for (const r of rows) {
       const s = this.resRowState(r.kind, r.vol);
       const b = document.createElement('button');
@@ -2422,6 +2437,7 @@ const App = {
       // 固定那三种一种只能有一张：加过的直接按着，别再摆第二张同样的。自定义卡能摆好几张，各勾各的行
       b.disabled = s.bound;
       b.dataset.res = r.kind;
+      if (r.tip) b.title = r.tip;
       if (r.vol) b.dataset.vol = r.vol;
       b.dataset.level = this.resLevel(r.kind === 'custom' ? { res: 'custom', rows: RES_CUSTOM_DEFAULT } : { res: r.kind, vol: r.vol });
       b.append(

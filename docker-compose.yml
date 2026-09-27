@@ -16,8 +16,8 @@
 #
 # NAS 拉不动 ghcr 的话，用离线镜像包 docker load 之后再补一个同名的标签：
 #
-#   docker load -i nasphere-1.0.7-linux-amd64.tar.gz
-#   docker tag local/nasphere:1.0.7 ghcr.io/peekaboo789/nasphere:1.0.7
+#   docker load -i nasphere-1.0.8-linux-amd64.tar.gz
+#   docker tag local/nasphere:1.0.8 ghcr.io/peekaboo789/nasphere:1.0.8
 #
 # 默认访问：
 #
@@ -52,7 +52,7 @@ services:
     # 目前是 linux/amd64 单架构；ARM 机型（群晖多数是 arm64/v8）
     # 直接用这条会报 no matching manifest，改走离线包那条。
     #
-    image: ghcr.io/peekaboo789/nasphere:1.0.7
+    image: ghcr.io/peekaboo789/nasphere:1.0.8
 
     # ========================================================
     # 自动重启
@@ -119,6 +119,10 @@ services:
       # 文件系统自己的账），跟容器内部的 df 无关，也不需要
       # 挂载宿主机根目录或 docker.sock。
       #
+      # 卡片末尾那两段（文件系统类型、宿主机挂载点）里，类型
+      # 是容器自己读挂载表读出来的，挂载点不是——它得靠下面
+      # environment 里那行 HOST_VOLUME_MAP 交进来，没写就空着。
+      #
       # ⚠️ 边界说清楚：只读挂载挡的是写，不是读。挂进来的
       # 那一卷，容器进程技术上就能读它的内容了，哪怕页面
       # 只显示数字。不需要逐卷用量就别加这一行。
@@ -136,6 +140,19 @@ services:
     #
     environment:
       TZ: Asia/Shanghai
+
+      # ------------------------------------------------------
+      # 卡片上那一行「挂载点」（可选，配了 volumes 才有意义）
+      #
+      # 容器自己的挂载表只看得到 /host/<挂点名>，宿主机那一条
+      # 路径它在容器里看不见，所以这一份对应关系要人交进来。
+      # 走 deploy.sh 不用管：它每次生成 compose 都自动写好这一行。
+      #
+      # 格式：<挂点名>=<宿主机绝对路径>，几卷之间用分号。
+      # 挂点名就是上面 volumes 冒号右边 /host/ 后面那一段。
+      # 不写也能用，只是卡片上少挂载点那一段读数。
+      # ------------------------------------------------------
+      # HOST_VOLUME_MAP: 'volume1=/volume1;volume2=/volume2;data=/volume1/docker/nasphere/data'
 
 # ============================================================
 # 常用命令

@@ -6,7 +6,7 @@
 #   1. 检测 CPU 架构
 #   2. 准备安装目录（默认 ./dat）
 #   3. 生成 docker-compose.yml
-#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.7
+#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.8
 #   5. 起容器：docker compose up -d
 #
 # 装完之后目录里只有两样东西：compose 文件（每次部署由脚本重写）和 data/
@@ -41,7 +41,7 @@ DEFAULT_IMAGE="ghcr.io/peekaboo789/nasphere"
 
 # 默认镜像标签。发新版时改这一行（要和 ghcr.io 上推上去的标签对得上）。
 # 这里故意不跟 latest：latest 哪天被重推，机器上跑的东西就跟着变了，退不回去。
-DEFAULT_TAG="1.0.7"
+DEFAULT_TAG="1.0.8"
 
 # 容器内监听端口，和镜像里的 ENV PORT 一致。要改只改宿主机那侧（--port / HOST_PORT）
 APP_PORT="18086"
@@ -163,7 +163,7 @@ NASphere 一键安装 / 部署工具
 
   --root <目录>        安装到哪里，默认 ./dat（相对当前目录）
   --tar <文件>         加载 docker save 导出的离线镜像包，跳过从 GHCR 拉取
-  --tag <标签>         镜像标签，默认 1.0.7
+  --tag <标签>         镜像标签，默认 1.0.8
   --port <端口>        宿主机端口，默认 18086（容器内固定监听 18086）
   --data-dir <路径>    数据目录，默认 <安装目录>/data
   --dry-run            只显示操作，不执行、不落盘
@@ -194,7 +194,7 @@ NASphere 一键安装 / 部署工具
     ./dat
 
   镜像：
-    ghcr.io/peekaboo789/nasphere:1.0.7
+    ghcr.io/peekaboo789/nasphere:1.0.8
 
   compose 项目名：
     nasphere
@@ -215,6 +215,9 @@ NASphere 一键安装 / 部署工具
     /vol00/<硬盘号> 都在这一套认法里），叶子名撞车时挂点名会自动带上上一层。
     NAS 上新增或删除卷之后要重跑一次本脚本才会更新。
     想固定清单就写成空格分隔的绝对路径；HOST_VOLUMES=none 表示只挂数据目录、不探测。
+    每一卷挂进来时，宿主机上那条原始路径会一并写进生成的 compose（HOST_VOLUME_MAP），卡片上的
+    「挂载点」那一截就是它——容器自己的挂载表只有 /host/<挂点名>，不交出来读不到宿主路径。
+    手写 compose 的人要让卡片显示挂载点，也得自己补这一行（格式：<挂点名>=<宿主绝对路径>，分号隔开）。
 
   初始账号 / 密码：
     admin / admin123（镜像内置的默认值，装完立刻登录去「设置 → 安全」改掉）
@@ -668,6 +671,9 @@ esac
 # 清单没写就先探一遍：把这台机器上真实存在的存储卷全部只读挂进来，主页于是能看见每一卷。
 # 写 HOST_VOLUMES=none 才是「只挂数据目录、别探」。
 EXTRA_MOUNTS=""
+# 挂点名 → 宿主机路径的那份对应关系，最后写成 compose 里的 HOST_VOLUME_MAP。
+# 容器里的挂载表只有 /host/<挂点名>，宿主机那一条路径只有这里知道，不交给它卡片上就少一段挂载点。
+VOL_MAP=""
 VOL_AUTO=0
 VOL_SKIPPED=""
 VOL_USED_NAMES=""
@@ -827,6 +833,7 @@ add_host_volume() {
 
   EXTRA_MOUNTS="${EXTRA_MOUNTS}      - ${host_vol}:/host/${vol_name}:ro
 "
+  VOL_MAP="${VOL_MAP:+$VOL_MAP;}${vol_name}=${host_vol}"
 }
 
 if [ "$HOST_VOLUMES" = "none" ]; then
@@ -850,6 +857,9 @@ fi
 for host_vol in $HOST_VOLUMES; do
   add_host_volume "$host_vol" "$VOL_AUTO"
 done
+
+# 数据目录那一卷也在卡片上（它的 id 固定是 data），宿主路径这里现成知道，一并交进去
+VOL_MAP="${VOL_MAP:+$VOL_MAP;}data=${DATA_DIR}"
 
 # 容器起来之后服务端就会补写 auth.json，首启提示必须在启动前取样
 FIRST_RUN=0
@@ -1055,6 +1065,12 @@ render_compose() {
   printf '\n'
   printf '    environment:\n'
   printf '      TZ: %s\n' "$TZ"
+
+  # 挂点名对宿主机路径：卡片上那一行挂载点只有这份对应关系给得出来，值用单引号包住，
+  # 里面的单引号按 YAML 的规矩写成两个
+  if [ -n "$VOL_MAP" ]; then
+    printf "      HOST_VOLUME_MAP: '%s'\n" "${VOL_MAP//\'/\'\'}"
+  fi
 
   # 套接字路径不是镜像默认那个时，才需要显式告诉服务端去哪儿连
   if [ -S "$DOCKER_SOCK" ] && [ "$DOCKER_SOCK" != "/var/run/docker.sock" ]; then
