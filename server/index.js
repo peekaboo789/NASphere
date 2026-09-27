@@ -84,16 +84,39 @@ function txt(v, max = LIM.text) {
   return typeof v === 'string' ? v.slice(0, max) : '';
 }
 
+/* 百分号转义解不开就当它不存在：这三处 decodeURIComponent 都坐在每个请求的同步路径上，
+   抛出去的是 URIError，Node 直接把这个连接断掉、进程跟着没——`Cookie: x=%zz` 一条匿名包就能打死服务。
+   解不开时返回空串，三条路各自退成「没登录」「404」，都是本来就该给的答案。 */
+function decodeOr(v) {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return '';
+  }
+}
+
+/* 解完码还留着 NUL 的路径不能喂给 fs：fs.stat 拿到带 NUL 的名字是当场同步抛（不是走回调报错），
+   抛在请求回调里就是进程没了——一条匿名 `GET /%00` 就能让服务下线。
+   这种请求本来就该吃 404，所以解出 NUL 直接当空路径处理。 */
+function decodePath(v) {
+  const s = decodeOr(v);
+  return s.includes('\0') ? '' : s;
+}
+
 function cleanId(v, fallback) {
   const s = txt(v, 40);
   return /^[A-Za-z0-9_-]{1,40}$/.test(s) ? s : fallback;
 }
 
+/* 少打协议头是这里最常见的写法：`localhost:3000`、`nas.lan:8080` 都指望这一句补上 http。
+   补的时候只认「主机名 + 冒号 + 纯数字端口」这一种形状（`javascript:` / `data:` / `chrome:` 冒号后面不是数字，走不到这条），
+   其余看不懂的协议一律丢掉。`//host/x` 是协议相对写法，原样留着，浏览器会跟着本页面自己补 http 还是 https。 */
 function urlish(v) {
   const s = txt(v, LIM.url).trim();
   if (!s) return '';
-  if (s.startsWith('/') && !s.startsWith('//')) return s;
+  if (s.startsWith('/')) return s;
   if (/^(https?|file|magnet|ftp):\/\//i.test(s)) return s;
+  if (/^[a-z][a-z0-9.-]*:\d{1,5}([/?#]|$)/i.test(s)) return 'http://' + s;
   if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return '';
   return 'http://' + s;
 }
@@ -460,13 +483,22 @@ function sanitize(raw) {
   };
 }
 
+/* 本机那三份私密文件（config / auth / .secret）都得原子落地：writeFileSync 写到一半被断电、被 OOM 掉，
+   留下的就是半个 JSON。auth.json 坏了 loadAuth 直接退回默认口令 admin123 —— 主人改的密码凭空失效，
+   门反倒对默认口令开着。先写同目录的 .tmp 再改名：同一文件系统里改名是原子的，外界只看到旧的或新的。 */
+function writePrivate(file, text) {
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, text, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
 function ensureSecret() {
   try {
     const s = fs.readFileSync(SECRET_PATH, 'utf8').trim();
     if (s.length >= 32) return s;
   } catch {}
   const s = crypto.randomBytes(32).toString('hex');
-  fs.writeFileSync(SECRET_PATH, s, { mode: 0o600 });
+  writePrivate(SECRET_PATH, s);
   return s;
 }
 
@@ -491,7 +523,7 @@ function loadAuth() {
       // 只设过密码的老 auth.json：补上账号名再写回，别把升级的人锁在门外
       if (!normalizeAccount(rec.user)) {
         rec.user = initialAccount();
-        fs.writeFileSync(AUTH_PATH, JSON.stringify(rec), { mode: 0o600 });
+        writePrivate(AUTH_PATH, JSON.stringify(rec));
       }
       return rec;
     }
@@ -502,7 +534,7 @@ function loadAuth() {
     user: initialAccount(),
     source: process.env.NAV_PASSWORD ? 'env' : 'default',
   };
-  fs.writeFileSync(AUTH_PATH, JSON.stringify(rec), { mode: 0o600 });
+  writePrivate(AUTH_PATH, JSON.stringify(rec));
   return rec;
 }
 
@@ -558,7 +590,7 @@ function parseCookies(req) {
   const out = {};
   for (const part of String(req.headers.cookie || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0) out[part.slice(0, i).trim()] = decodeOr(part.slice(i + 1).trim());
   }
   return out;
 }
@@ -670,9 +702,7 @@ function configRev() {
 }
 
 function writeConfig(cfg) {
-  const tmp = CONFIG_PATH + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, CONFIG_PATH);
+  writePrivate(CONFIG_PATH, JSON.stringify(cfg, null, 2));
 }
 
 function collectStrings(node, out) {
@@ -745,28 +775,44 @@ function dockerErr(raw, status) {
 function dockerRequest(method, api, body, timeout = DOCKER_TIMEOUT) {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    /* 只等 res 的 'end' 是不够的：应答写了一半就断链（dockerd 被重启、被 OOM 掉）时 'end' 永远不来，
+       超时也救不了——套接字已经没了，空闲计时器不再响。实测这样两次请求全挂死，
+       而 ttlCache 里那份 pending 也就永远清不掉，容器面板从这以后再也刷不动。
+       'close' 是这条连接彻底没了的兜底信号，一定落地，所以拿它配合一个「只落地一次」的闸收尾。 */
+    let done = false;
+    const once = (fn, arg) => {
+      if (done) return;
+      done = true;
+      fn(arg);
+    };
     const req = http.request(
       { ...dockerTarget, method, path: `/${DOCKER_API}${api}`, headers: { Accept: 'application/json' }, timeout },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
+        res.on('error', (e) => once(reject, new Error('Docker 应答读坏了：' + (e.code || e.message))));
+        res.on('aborted', () => once(reject, new Error('Docker 应答中途断开了连接')));
         res.on('end', () => {
           const raw = Buffer.concat(chunks).toString('utf8');
-          if (res.statusCode >= 400) return reject(dockerErr(raw, res.statusCode));
+          if (res.statusCode >= 400) return once(reject, dockerErr(raw, res.statusCode));
           // /_ping 这类接口回的是纯文本 OK，别当成解析失败
-          if (!raw) return resolve(null);
+          if (!raw) return once(resolve, null);
           try {
-            resolve(JSON.parse(raw));
+            once(resolve, JSON.parse(raw));
           } catch {
-            resolve(raw);
+            once(resolve, raw);
           }
         });
       }
     );
     req.setTimeout(timeout, () => req.destroy(new Error('连 Docker 超时')));
     req.on('error', (e) =>
-      reject(new Error(e.code === 'ENOENT' || e.code === 'ENOTFOUND' ? '找不到 Docker 套接字' : e.code === 'ECONNREFUSED' ? 'Docker 端口没人监听' : e.message))
+      once(
+        reject,
+        new Error(e.code === 'ENOENT' || e.code === 'ENOTFOUND' ? '找不到 Docker 套接字' : e.code === 'ECONNREFUSED' ? 'Docker 端口没人监听' : e.message)
+      )
     );
+    req.on('close', () => once(reject, new Error('与 Docker 的连接中途断开了')));
     if (payload) req.write(payload);
     req.end();
   });
@@ -922,8 +968,11 @@ function containerRefs(cfg) {
 
 async function dockerState(names) {
   if (!(await dockerPing())) return { available: false, error: `连不上 Docker（${DOCKER_HOST}）`, containers: {} };
-  const list = (await dockerList()) || [];
-  const byName = new Map(list.map((c) => [c.name, c]));
+  /* dockerList 失败时给的是 null（缓存层把出错折成 null），空列表才是真的一个容器都没有。
+     两者不能混：把故障画成「可用、0 个容器」，面板上就是一片空白加一句假的可用的 */
+  const listed = await dockerList();
+  if (!listed) return { available: false, error: 'Docker 没能给出容器列表', containers: {} };
+  const byName = new Map(listed.map((c) => [c.name, c]));
   const containers = {};
   await Promise.all(
     names.slice(0, 80).map(async (name) => {
@@ -958,7 +1007,9 @@ function dockerAct(name, action) {
    边界只有一条：只取计数器一样的数字，不读任何文件内容。
      · 内存取 /proc/meminfo 的两个计数，读不到就用 os 模块给的同一份统计
      · CPU / 负载取 /proc/stat 第一行与 /proc/loadavg，都是累计计数，跟上一次采样作差
-     · 网络取 /proc/net/dev 的收发字节，同样作差成速率；回环和 Docker 自己的网桥不算
+     · 网络取 /proc/net/dev 的收发字节，同样作差成速率；回环和 Docker 自己的网桥不算，
+       被 bond / bridge 收编的从属网卡也不算（上层那一个已经把它的量数进去了）。容器默认只看得见自己
+       那块虚拟网卡，这一档数字是真的但数的不是这台机器，所以带 localOnly 让行上说明白
      · 核显在 /sys/class/drm 每张 card 的子树里认那几个文件名（gpu_busy_percent / busy_percent / 频率三档），
        驱动只写频率时按 RPn→RP0 折算成百分比，并在行上写明这一格是折算的
      · 物理盘取 /sys/block 的目录名、size 与 device/model，那里只有型号和大小，从来不是路径
@@ -1233,6 +1284,29 @@ function readCpu() {
 // 回环、Docker 自己的网桥和一对端的 veth 都不算进出机器的流量，算进去数字会翻倍
 const NET_SKIP = /^(?:lo|veth|docker|br-|virbr|tap|dummy)/;
 
+/* 这块网卡是不是这台机器自己的物理进出：
+   · 被 bond / bridge 收编的从属网卡（/sys/class/net/<name>/master 存在）要跳过——
+     上层那一个已经把它成员的量数进去了，两边一起加就是把同一份流量数两遍
+   · 带 device（真网卡）或带 lower_*（bond / bridge 这一层）的才算这台的流量
+   · 一处都对不上就只剩容器自己那块虚拟网卡：数字是真的，可它是这个容器的进出，不是这台 NAS 的，
+     所以另带一份 localOnly 让行上说明白，别拿它冒充实测
+   /sys/class/net 读不到时不猜：不写 localOnly。 */
+function classifyNic(name) {
+  const kids = readSysDir(path.join('sys', 'class', 'net', name));
+  if (!kids.length) return null;
+  if (kids.some((k) => k.startsWith('lower_'))) return true;
+  return kids.includes('device');
+}
+
+function nicIsEnslaved(name) {
+  try {
+    fs.statSync(sysPath('sys', 'class', 'net', name, 'master'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function netSample() {
   let raw = '';
   try {
@@ -1243,42 +1317,47 @@ function netSample() {
   let rx = 0;
   let tx = 0;
   let seen = false;
+  let phys = null;
   for (const line of raw.split('\n')) {
     const i = line.indexOf(':');
     if (i < 0) continue;
     const name = line.slice(0, i).trim();
     if (!name || NET_SKIP.test(name)) continue;
+    if (nicIsEnslaved(name)) continue;
     // 收发字节分别是第 1 列和第 9 列，两份表头之外每行的列数固定
     const f = line.slice(i + 1).trim().split(/\s+/).map(Number);
     if (f.length < 16 || !Number.isFinite(f[0]) || !Number.isFinite(f[8])) continue;
     rx += f[0];
     tx += f[8];
     seen = true;
+    const kind = classifyNic(name);
+    if (kind === true) phys = true;
+    else if (phys === null && kind === false) phys = false;
   }
-  return seen ? { at: Date.now(), rx, tx } : null;
+  return seen ? { at: Date.now(), rx, tx, phys } : null;
 }
 
 let netPrevSys = null;
 
 function readNet() {
   const cur = netSample();
-  let down = null;
-  let up = null;
-  let warming = false;
+  const out = { down: null, up: null, warming: false };
   if (cur) {
     const prev = netPrevSys;
     netPrevSys = cur;
-    warming = !prev;
+    out.warming = !prev;
     if (prev && cur.at > prev.at) {
       const secs = (cur.at - prev.at) / 1000;
       const dRx = cur.rx - prev.rx;
       const dTx = cur.tx - prev.tx;
       // 计数回绕（重启或换网卡）时那一路给 null，别把负的塞进格式化函数
-      if (dRx >= 0) down = dRx / secs;
-      if (dTx >= 0) up = dTx / secs;
+      if (dRx >= 0) out.down = dRx / secs;
+      if (dTx >= 0) out.up = dTx / secs;
     }
+    // phys 是这一轮「这块网卡算不算这机器自己的」的判断，作差不成立时也要照说
+    if (cur.phys === false) out.localOnly = true;
   }
-  return { down, up, warming };
+  return out;
 }
 
 /* 各家驱动把占用率写在不一样的地方，而且这套布局跟着内核版本换名字（i915 是 gt/gt0/rcs0，xe 是 render0/copy0，
@@ -1644,8 +1723,17 @@ function handleBing(res) {
   });
 }
 
+/* stat 点头之后文件还能消失（改配置触发的清理正和这一枪抢同一个文件），那时读流会抛 'error'；
+   没人接这个事件就是未捕获异常，进程跟着走。头已经发出去了，改不了状态码，只能断这条连接。 */
+function pipeOrDrop(res, file) {
+  const s = fs.createReadStream(file);
+  s.on('error', () => res.destroy());
+  s.pipe(res);
+}
+
 function serveStatic(req, res, pathname) {
-  const rel = pathname === '/' ? '/index.html' : decodeURIComponent(pathname);
+  const rel = pathname === '/' ? '/index.html' : decodePath(pathname);
+  if (!rel) return send(res, 404, 'not found');
   const file = path.resolve(PUBLIC_DIR, '.' + rel);
   if (!file.startsWith(PUBLIC_DIR + path.sep) && file !== PUBLIC_DIR) return send(res, 404, 'not found');
   fs.stat(file, (err, st) => {
@@ -1657,12 +1745,13 @@ function serveStatic(req, res, pathname) {
       'Cache-Control': ext === '.html' ? 'no-cache' : 'no-cache',
       'X-Content-Type-Options': 'nosniff',
     });
-    fs.createReadStream(file).pipe(res);
+    pipeOrDrop(res, file);
   });
 }
 
 function serveMedia(req, res, pathname) {
-  const name = path.basename(decodeURIComponent(pathname));
+  const name = path.basename(decodePath(pathname));
+  if (!name) return send(res, 404, 'not found');
   const file = path.join(UPLOAD_DIR, name);
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return send(res, 404, 'not found');
@@ -1671,7 +1760,7 @@ function serveMedia(req, res, pathname) {
       'Content-Length': st.size,
       'Cache-Control': 'public, max-age=31536000, immutable',
     });
-    fs.createReadStream(file).pipe(res);
+    pipeOrDrop(res, file);
   });
 }
 
@@ -1766,13 +1855,15 @@ const server = http.createServer((req, res) => {
         const next = String(body.new ?? '');
         const changingPw = next !== '';
         if (changingPw && next.length < 6) return send(res, 400, { error: '新密码至少 6 位' });
-        auth = {
+        const nextAuth = {
           user: nextAccount,
           ...(changingPw ? hashPassword(next) : { salt: auth.salt, hash: auth.hash }),
           source: changingPw ? 'user' : auth.source,
           updatedAt: new Date().toISOString(),
         };
-        fs.writeFileSync(AUTH_PATH, JSON.stringify(auth), { mode: 0o600 });
+        // 先落盘再换内存里那一份：写坏了（盘满、只读挂载）就维持旧密码，别出现「这一轮会话用新密码、重启又回旧密码」
+        writePrivate(AUTH_PATH, JSON.stringify(nextAuth));
+        auth = nextAuth;
         console.log(changingPw ? 'credentials changed (account + password)' : 'account renamed');
         send(res, 200, sessionView(true));
       })
@@ -1793,7 +1884,8 @@ const server = http.createServer((req, res) => {
     return dockerPing()
       .then(async (ok) => {
         if (!ok) return send(res, 200, { available: false, error: `连不上 Docker（${DOCKER_HOST}）`, containers: [] });
-        const list = (await dockerList()) || [];
+        const list = await dockerList();
+        if (!list) return send(res, 200, { available: false, error: 'Docker 没能给出容器列表', containers: [] });
         send(res, 200, { available: true, error: '', containers: list });
       })
       .catch((e) => send(res, 200, { available: false, error: e.message, containers: [] }));

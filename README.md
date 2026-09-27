@@ -123,7 +123,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.0.8
+镜像：ghcr.io/peekaboo789/nasphere:1.1.0
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -191,10 +191,10 @@ chmod +x deploy.sh
 在安装目录里执行：
 
 ```bash
-./deploy.sh --tag 1.1.0
+./deploy.sh --tag 1.2.0
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.0.8`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.1.0`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -251,7 +251,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.0.8`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.1.0`，拉下来直接起容器。
 
 默认访问：
 
@@ -284,8 +284,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.0.8-linux-amd64.tar.gz
-docker tag local/nasphere:1.0.8 ghcr.io/peekaboo789/nasphere:1.0.8
+docker load -i nasphere-1.1.0-linux-amd64.tar.gz
+docker tag local/nasphere:1.1.0 ghcr.io/peekaboo789/nasphere:1.1.0
 docker compose up -d
 ```
 
@@ -297,10 +297,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.0.8 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.1.0 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.0.8
+docker pull ghcr.io/peekaboo789/nasphere:1.1.0
 ```
 
 然后：
@@ -314,7 +314,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.0.8
+  ghcr.io/peekaboo789/nasphere:1.1.0
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -369,7 +369,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.0.8-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.1.0-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -1446,7 +1446,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.0.8`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.1.0`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1699,6 +1699,39 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.1.0
+
+这一版不加功能，全是排查出来的缺陷：一键安装脚本有三处「该报错不报错、该回滚不回滚」，页面上有四处会在特定操作顺序下当场抛异常，服务端有七处坏值、坏请求是静默吞掉的。
+
+**`deploy.sh`：起容器失败时真的能走到回滚**
+
+以前在 `set -e` 底下，`docker compose up -d` 一挂就当场结束，后面「等健康检查 → 自动回滚到旧版本」整段跑不到——而旧镜像明明还被脚本留着（`$IMAGE:rollback`）。现在这一步的失败折成一个标记，不等健康检查直接进回滚，末尾仍以部署失败、退出码 1 收场，外层脚本照样能判。
+
+**`deploy.sh`：探到的卷刚好叫 `/data` 时不再撞名**
+
+挂点名那套避让只躲开已经用过的名字，而末尾那条 `data=<数据目录>` 是写死的、没参与避让。于是同一份 compose 里可能出现两个 `data=`，谁生效只看解析顺序。现在这个名字先被占住，卷会被让到别的挂点名，宿主机路径照样映射得进来。
+
+**`deploy.sh`：超长数字参数会被拦下**
+
+`[ "23 位的数" -gt 65535 ]` 不是「假」，是当场报错并返回状态 2；报错落在 `if` 的条件里就等于没拦住，脚本会带着这个假端口往下走，健康检查那道 `while` 也会因为同样的报错一次都不进。端口、`HEALTH_WAIT`、`KEEP_BACKUPS` 现在比大小之前先按位数掐一道，报错文案不变。
+
+**页面：四处异常**
+
+- 容器组件的轮询定时器收成一个出口，改名、重渲染、来回切换不会再留下没人管的旧定时器。
+- 资源读数卡的高度改成按「真正画出来的行数」算。勾上「存储空间」「硬盘」这类会展开成多行的读数时，以前按勾选项数算高度，卡片不够高，上下两头各被裁掉一截。
+- 长按拖动容器组件的中途，如果配置被别处刷新（另一台设备保存、重新登录），指针底下那张卡会被换掉。以前这里抛 `Cannot read properties of null`，拖动当场断掉；现在安静收尾，也不会把坐标写进配置。
+
+**服务端：坏值不再静默**
+
+- 网址解析补上 `host:port`、`//host/path` 两种写法，`javascript:` / `data:` / `chrome:` 这类一律当空处理；
+- Docker 那边的应答被截断时，接口报「Docker 没能给出容器列表」而不是让请求挂在半路；容器列表为空算 0 个，不算「不可用」；
+- `config.json`、凭据和内部密钥改走临时文件 + 原子改名，权限 0600，写一半时掉电不会留下半个 JSON；
+- 改密码先落盘再放行新凭据；畸形 Cookie 算未登录，答 200 而不是 500；静态文件与上传的媒体走同一条「对端断了就丢掉」的出口。
+
+**网络读数说明白数的是哪一层**
+
+容器里看不见宿主机的网卡，只看得见自己那一层的虚拟网卡。现在读数带一个 `localOnly`，为真时主页那一格会写明读的是容器自己的网络，不拿它冒充整台 NAS 的流量；`/sys/class/net` 读不到时不猜，这个字段干脆不给。网卡名、`/sys/class/net`、`/dev/` 这些一律不出接口。
 
 ## v1.0.8
 

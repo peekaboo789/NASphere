@@ -6,7 +6,7 @@
 #   1. 检测 CPU 架构
 #   2. 准备安装目录（默认 ./dat）
 #   3. 生成 docker-compose.yml
-#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.0.8
+#   4. 从 GHCR 拉镜像：docker pull ghcr.io/peekaboo789/nasphere:1.1.0
 #   5. 起容器：docker compose up -d
 #
 # 装完之后目录里只有两样东西：compose 文件（每次部署由脚本重写）和 data/
@@ -25,7 +25,7 @@
 #   cd ./dat
 #   ./deploy.sh
 #
-# 升级：重跑上面任意一条，脚本自己 pull 新镜像；换版本用 ./deploy.sh --tag 1.1.0
+# 升级：重跑上面任意一条，脚本自己 pull 新镜像；换版本用 ./deploy.sh --tag 1.2.0
 #
 # 卸载：
 #   ./deploy.sh --uninstall
@@ -41,7 +41,7 @@ DEFAULT_IMAGE="ghcr.io/peekaboo789/nasphere"
 
 # 默认镜像标签。发新版时改这一行（要和 ghcr.io 上推上去的标签对得上）。
 # 这里故意不跟 latest：latest 哪天被重推，机器上跑的东西就跟着变了，退不回去。
-DEFAULT_TAG="1.0.8"
+DEFAULT_TAG="1.1.0"
 
 # 容器内监听端口，和镜像里的 ENV PORT 一致。要改只改宿主机那侧（--port / HOST_PORT）
 APP_PORT="18086"
@@ -163,7 +163,7 @@ NASphere 一键安装 / 部署工具
 
   --root <目录>        安装到哪里，默认 ./dat（相对当前目录）
   --tar <文件>         加载 docker save 导出的离线镜像包，跳过从 GHCR 拉取
-  --tag <标签>         镜像标签，默认 1.0.8
+  --tag <标签>         镜像标签，默认 1.1.0
   --port <端口>        宿主机端口，默认 18086（容器内固定监听 18086）
   --data-dir <路径>    数据目录，默认 <安装目录>/data
   --dry-run            只显示操作，不执行、不落盘
@@ -194,7 +194,7 @@ NASphere 一键安装 / 部署工具
     ./dat
 
   镜像：
-    ghcr.io/peekaboo789/nasphere:1.0.8
+    ghcr.io/peekaboo789/nasphere:1.1.0
 
   compose 项目名：
     nasphere
@@ -631,13 +631,20 @@ NEW_REF="$IMAGE:$TAG"
 # 参数校验
 # ============================================================
 
+# [ "23 位的数" -gt 65535 ] 不是「假」而是当场报错（状态 2），报错落在 if 的条件里就等于没拦住：
+# 脚本会带着这个假端口往下走，健康检查那道 while 也会因为同样的报错一次都不进。
+# 所以比大小之前先按字符数掐一道——位数比上限还多的，一定超出范围。
+too_long() {
+  [ "${#1}" -gt "${#2}" ]
+}
+
 case "$HOST_PORT" in
   '' | *[!0-9]*)
     die "端口必须是数字：$HOST_PORT"
     ;;
 esac
 
-if [ "$HOST_PORT" -lt 1 ] || [ "$HOST_PORT" -gt 65535 ]; then
+if too_long "$HOST_PORT" 65535 || [ "$HOST_PORT" -lt 1 ] || [ "$HOST_PORT" -gt 65535 ]; then
   die "端口超出范围（1–65535）：$HOST_PORT"
 fi
 
@@ -647,11 +654,19 @@ case "$KEEP_BACKUPS" in
     ;;
 esac
 
+if too_long "$KEEP_BACKUPS" 9999; then
+  die "KEEP_BACKUPS 最大 9999：$KEEP_BACKUPS"
+fi
+
 case "$HEALTH_WAIT" in
   '' | *[!0-9]*)
     die "HEALTH_WAIT 必须是数字：$HEALTH_WAIT"
     ;;
 esac
+
+if too_long "$HEALTH_WAIT" 9999; then
+  die "HEALTH_WAIT 最大 9999：$HEALTH_WAIT"
+fi
 
 # 相对数据目录按安装目录定死：compose 文件里写的是绝对路径，
 # 相对路径会被 compose 按文件所在目录解释，换台机器就指到别处去了
@@ -676,7 +691,9 @@ EXTRA_MOUNTS=""
 VOL_MAP=""
 VOL_AUTO=0
 VOL_SKIPPED=""
-VOL_USED_NAMES=""
+# 「data」这个名字留给末尾那条 data=<数据目录>：探到的卷刚好叫 /data 时，挂点名再取 data 就写出一份
+# 有两个 data= 的对应关系，谁覆盖谁只看解析顺序。这里先占住，让挂点名那套避让绕开它。
+VOL_USED_NAMES=" data"
 
 # 一卷的标志是「跟父目录不在同一个文件系统上」：同一个 st_dev 就是顺手建出来的空目录，不是卷
 is_volume_mount() {
@@ -1252,7 +1269,14 @@ fi
 
 log "启动 NASphere"
 
-compose_run up -d --remove-orphans
+# 起容器这一步失败不能就地了断：set -e 下 compose up 一挂，下面「等待服务 → 自动回滚」整段都跑不到，
+# 而旧镜像明明还在本机（上面刚留了 $IMAGE:rollback）。折成失败标记，让那段回滚真的接手。
+UP_OK=1
+compose_run up -d --remove-orphans || UP_OK=0
+
+if [ "$UP_OK" = 0 ]; then
+  warn "docker compose 启动失败：不等健康检查，直接进自动回滚"
+fi
 
 # ============================================================
 # 获取 NAS IP
@@ -1344,7 +1368,7 @@ log "等待 NASphere 服务启动（最多 ${HEALTH_WAIT}s）"
 OK=0
 N=0
 
-while [ "$N" -lt "$HEALTH_WAIT" ]; do
+while [ "$UP_OK" = 1 ] && [ "$N" -lt "$HEALTH_WAIT" ]; do
 
   if probe 2>/dev/null; then
     OK=1

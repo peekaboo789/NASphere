@@ -30,13 +30,20 @@ const Docker = {
     return this.byName.get(name) || null;
   },
 
+  // 轮询只有 arm() 这一个开关：别处再自己 setInterval 就会留下没人清的旧句柄，撤光组件也还在后台问
+  arm() {
+    clearInterval(this.timer);
+    this.timer = this.refs().length ? setInterval(() => { if (!document.hidden) this.fetch(); }, 3000) : 0;
+  },
+
   // 每次重画分组之后调用：清掉已删除的容器、按需要起停轮询
   sync() {
     const names = this.refs();
     for (const key of [...this.byName.keys()]) if (!names.includes(key)) this.byName.delete(key);
-    clearInterval(this.timer);
-    this.timer = 0;
-    if (!names.length) return;
+    if (!names.length) {
+      this.arm();
+      return;
+    }
     if (!this.bound) {
       this.bound = true;
       document.addEventListener('visibilitychange', () => {
@@ -45,9 +52,7 @@ const Docker = {
     }
     this.paintAll();
     this.fetch();
-    this.timer = setInterval(() => {
-      if (!document.hidden) this.fetch();
-    }, 3000);
+    this.arm();
   },
 
   async fetch() {
@@ -68,14 +73,8 @@ const Docker = {
 
   // 启停之后立刻补一轮，别等下一个 3 秒
   refresh() {
-    clearInterval(this.timer);
-    this.timer = 0;
-    if (!this.refs().length) return;
-    this.fetch().then(() => {
-      this.timer = setInterval(() => {
-        if (!document.hidden) this.fetch();
-      }, 3000);
-    });
+    this.arm();
+    if (this.refs().length) this.fetch();
   },
 
   stop() {
@@ -284,7 +283,9 @@ function resRowOf(key, d, compact) {
   if (key === 'net') {
     const n = d.net || {};
     if (!resHas(n.down) && !resHas(n.up)) return [{ rk: 'net', k: '网络', note: n.warming ? '刚开始采样' : '读不到网络流量' }];
-    return [{ rk: 'net', k: '网络', note: compact ? `↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)}` : `下行 ${fmtRate(n.down)} · 上行 ${fmtRate(n.up)}` }];
+    // 容器默认只看得见自己的网卡，那一档是真数字但数的不是这台机器，必须写在行上
+    const why = n.localOnly ? '（只数得到容器自己的流量）' : '';
+    return [{ rk: 'net', k: '网络', note: (compact ? `↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)}` : `下行 ${fmtRate(n.down)} · 上行 ${fmtRate(n.up)}`) + why }];
   }
   if (key === 'gpu') {
     const g = d.gpu || {};
@@ -899,9 +900,11 @@ const App = {
     if (!st.free || !st.moved) return;
     // 拖的时候只改这一张的 CSS 变量：整页重画会把指针底下这张换掉，拖动就断了。
     // 每次重新量一遍摆放区，中途滚了页面也跟得上。
-    const lr = $('#dkLayer').getBoundingClientRect();
-    st.el.style.setProperty('--dk-x', Math.max(0, e.clientX - lr.left - st.grabX) + 'px');
-    st.el.style.setProperty('--dk-y', Math.max(0, e.clientY - lr.top - st.grabY) + 'px');
+    const lr = $('#dkLayer');
+    if (!lr) return;
+    const box = lr.getBoundingClientRect();
+    st.el.style.setProperty('--dk-x', Math.max(0, e.clientX - box.left - st.grabX) + 'px');
+    st.el.style.setProperty('--dk-y', Math.max(0, e.clientY - box.top - st.grabY) + 'px');
   },
 
   endDockerDrag(st) {
@@ -924,10 +927,13 @@ const App = {
   /* 落笔：写回的是渲染之后的位置（窄屏上已经被 CSS 夹进屏宽），存的数就永远是不溢出的那一份。
      顺带把这张挪到数组末尾——数组顺序就是叠放顺序，刚拖过的得在顶上，跟松手时看到的画面一致。 */
   commitDockerPos(el, item) {
-    const lr = $('#dkLayer').getBoundingClientRect();
+    // 拖的途中整页重画过（别的设备改了配置）：这张已经从文档里摘掉，量出来全是 0，写回去会让卡片跳到左上角
+    const lr = $('#dkLayer');
+    if (!lr || !el.isConnected) return;
+    const box = lr.getBoundingClientRect();
     const r = el.getBoundingClientRect();
-    const x = Math.max(0, Math.round(r.left - lr.left));
-    const y = Math.max(0, Math.round(r.top - lr.top));
+    const x = Math.max(0, Math.round(r.left - box.left));
+    const y = Math.max(0, Math.round(r.top - box.top));
     const list = Store.cfg.docker.items || [];
     const cur = list.find((l) => l.id === item.id);
     if (!cur) return;
@@ -1864,7 +1870,8 @@ const App = {
     const tiles = st.el.parentElement;
     const sec = tiles && tiles.closest('.group');
     const toGroup = sec && sec.dataset.group;
-    const at = [...tiles.children].indexOf(st.el);
+    // 拖的途中整页重画过：这张已经不在任何一栏里了，插入位没得算，只当白拖一次（下面松手的 click 照样吃掉）
+    const at = tiles ? [...tiles.children].indexOf(st.el) : -1;
     // moveLink 要的是「拖之前那一栏里的插入位」：同组右移时卡片本身还算在里面，得补回一格
     const index = toGroup === st.groupId && at > st.fromIndex ? at + 1 : at;
     if (toGroup && (toGroup !== st.groupId || at !== st.fromIndex)) {
@@ -3039,7 +3046,8 @@ const App = {
       if (on) rows.push(key);
       it.rows = rows;
       // 行数变了别把新勾的那行裁掉：只在装不下时加高，要缩回去用「高」那个滑块
-      it.h = resFitH(rows.length, it.h);
+      // 高的是画出来的行数（'vols' / 'disks' 一档会展开成好几行），不是勾了几个键，否则勾「全部卷」必然矮一截
+      it.h = resFitH(this.resRows(it).length, it.h);
     });
     this.renderDockerTiles();
     this.renderDockerPane();
