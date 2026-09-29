@@ -512,6 +512,9 @@ const App = {
     $('#editModeToggle').checked = Store.editMode;
     document.documentElement.dataset.edit = Store.editMode ? 'on' : 'off';
     $('#editBar').hidden = !Store.editMode;
+    // 画布收最后一手：前面每一块都各就各位了，它才好把坐标、叠放序、手柄一起写上去
+    Board.render();
+    this.renderLayoutPane();
   },
 
   applyAppearance() {
@@ -588,6 +591,8 @@ const App = {
     this.playFlip(prev);
     this.renderSideNav();
     this.updateScrollRail();
+    // 分组面板是画布上的一格：重建之后得把坐标与手柄重新写一遍（折叠、增删分组都会走到这里）
+    Board.render();
   },
 
   /* ---------- 容器组件：每张各自带坐标摆在主页上（应用矩阵那个窗口已经撤了），长宽和位置各存各的 ---------- */
@@ -599,6 +604,7 @@ const App = {
       layer.hidden = true;
       layer.innerHTML = '';
       layer.style.height = '0px';
+      Board.render();
       Docker.sync();
       Res.sync();
       return;
@@ -607,14 +613,20 @@ const App = {
     layer.innerHTML = '';
     for (const item of items) layer.appendChild(isResource(item) ? this.resTileNode(item) : this.dockerTileNode(item));
     this.fitDockerLayer();
+    Board.render();
     Docker.sync();
     Res.sync();
   },
 
   /* 绝对定位不撑页面高度：这条摆放区的高度得按最下面那张组件自己拉出来，
-     不然把组件拖到区外就永远滚不到、看不见。 */
+     不然把组件拖到区外就永远滚不到、看不见。
+     固定排列之后整个摆放区只剩一层空壳（display:contents），画布自己会按最下面那块算高，这里就不插手了。 */
   fitDockerLayer() {
     const layer = $('#dkLayer');
+    if (Board.isFree()) {
+      layer.style.height = '';
+      return;
+    }
     let bottom = 0;
     for (const it of (Store.cfg.docker && Store.cfg.docker.items) || []) {
       bottom = Math.max(bottom, (it.y || 0) + (it.h || 0));
@@ -622,10 +634,23 @@ const App = {
     layer.style.height = bottom + 'px';
   },
 
-  // 新组件的落点：最下面那张的再下面，别一盖上去就挡住已有的
+  // 新组件的落点：最下面那一格的再下面，别一盖上去就挡住已有的
   nextDockerPos() {
+    const items = (Store.cfg.docker && Store.cfg.docker.items) || [];
+    if (Board.isFree()) {
+      // 画布坐标是整页一套的：得连固定模块和分组面板一起看，光看组件自己那一串会盖到时钟脸上去
+      let bottom = 0;
+      for (const it of items) bottom = Math.max(bottom, (it.y || 0) + (it.h || 0));
+      for (const el of $$('#groups .group')) {
+        const key = 'group:' + el.dataset.group;
+        const b = Board.box(key);
+        if (!b) continue;
+        bottom = Math.max(bottom, (Number(b.y) || 0) + el.offsetHeight);
+      }
+      return { x: 0, y: bottom ? bottom + DK_GAP : 0 };
+    }
     let bottom = 0;
-    for (const it of (Store.cfg.docker && Store.cfg.docker.items) || []) {
+    for (const it of items) {
       bottom = Math.max(bottom, (it.y || 0) + (it.h || 0));
     }
     return { x: 0, y: bottom ? bottom + DK_GAP : 0 };
@@ -847,6 +872,8 @@ const App = {
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       if (e.target instanceof Element && e.target.closest('button')) return;
+      // 固定排列之后挪这张组件走的是画布那套抓手与手柄，长按这一条只留一个用途：手机上按住了开菜单
+      if (Board.isFree() && e.pointerType !== 'touch') return;
       this.clearClickKiller();
       if (this.holdDrag) this.cancelHoldDrag(this.holdDrag);
       const r = el.getBoundingClientRect();
@@ -854,8 +881,9 @@ const App = {
         el,
         item,
         // 窄屏那一档 CSS 把组件改成静态竖排（配置里的坐标夹不进屏宽，见 styles.css 那条）：
-        // 这时候没有坐标落点可写，长按只当手机上的「右键」，拖了也不动配置
-        free: getComputedStyle(el).position === 'absolute',
+        // 这时候没有坐标落点可写，长按只当手机上的「右键」，拖了也不动配置。
+        // 画布坐标和摆放区坐标是两套，所以固定排列之后长按也不能再往 --dk-x 上写。
+        free: Board.isFree() ? false : getComputedStyle(el).position === 'absolute',
         // 记住手指落在卡片内部的哪一处：拖动中保持这点不动，卡片不会跳一下
         grabX: e.clientX - r.left,
         grabY: e.clientY - r.top,
@@ -909,6 +937,9 @@ const App = {
 
   endDockerDrag(st) {
     const dragged = st.active;
+    // 画布那边此刻正在拖这一张（手指按住抓手拖、动得慢过了 420ms 才起步）：
+    // 这一根指针归画布管，别再往松手那一点弹一张菜单出来。窗口上的 pointerup 我们比它先跑，所以 busy 还在。
+    if (Board.isFree() && Board.busy) { this.cancelHoldDrag(st); return; }
     this.cancelHoldDrag(st);
     if (!dragged) return;
     st.el.classList.remove('dragging');
@@ -1088,13 +1119,22 @@ const App = {
     let cur = forceId || this.navLockId;
     if (!cur) {
       const line = window.innerHeight * 0.4;
+      // 整页可以随便摆，数组顺序不再等于从上往下的视觉顺序：
+      // 越过那条线的里面取「离线最近」那一个，一头一尾也按视觉位置认，不按数组首尾。
+      let nearest = -Infinity;
+      let hi = -Infinity;
+      let lo = Infinity;
+      let topId = null;
+      let botId = null;
       for (const s of secs) {
-        if (s.getBoundingClientRect().top <= line) cur = s.dataset.group;
+        const top = s.getBoundingClientRect().top;
+        if (top <= line && top > nearest) { nearest = top; cur = s.dataset.group; }
+        if (top > hi) { hi = top; botId = s.dataset.group; }
+        if (top < lo) { lo = top; topId = s.dataset.group; }
       }
-      // 还没滚到第一个分组时先亮第一个；滚到底就亮最后一个（短页面也能跳到位）
-      if (!cur && secs.length) cur = secs[0].dataset.group;
-      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4 && secs.length) {
-        cur = secs[secs.length - 1].dataset.group;
+      if (!cur && topId) cur = topId;
+      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4 && botId) {
+        cur = botId;
       }
     }
     for (const d of dots) {
@@ -3095,6 +3135,70 @@ const App = {
     node.style.setProperty('--dk-tile-h', it.h + 'px');
     // 摆放下缘可能跟着变了：这条摆放区的高度是自己算的，不重算会把下面那截留空或截掉
     this.fitDockerLayer();
+    // 固定排列之后这一张的尺寸写在画布那套 --w / --h 上，得让画布跟着重算一次
+    Board.render();
+  },
+
+  /* ---------- 设置「主页排列」这一栏：每一块固定之后的精确宽高 ----------
+     位置不在这里调（去主页按住抓手拖），这一栏只补「差几个像素」的那一手。
+     容器组件与读数卡的宽高滑块在「应用矩阵」那一栏，同一张卡不列两次。 */
+
+  renderLayoutPane() {
+    const ul = $('#layoutList');
+    if (!ul) return;
+    $('#layoutResetBtn').disabled = !Board.isFree();
+    ul.innerHTML = '';
+    const keys = Board.paneKeys();
+    if (!keys.length) {
+      const li = document.createElement('li');
+      li.className = 'muted';
+      li.textContent = Board.isFree()
+        ? '现在只有容器组件带着坐标，它们的宽高滑块在「应用矩阵」那一栏。'
+        : '还没固定过排列：开着编辑模式在主页上拖任意一块，这里就会列出每一块。';
+      ul.appendChild(li);
+      return;
+    }
+    for (const { key, spec, name } of keys) {
+      const cur = Board.current(key);
+      const li = document.createElement('li');
+      li.className = 'app-row dk-row';
+      const strong = document.createElement('strong');
+      strong.textContent = name;
+      const grow = document.createElement('span');
+      grow.className = 'grow';
+      grow.textContent = `位置 ${cur.x}, ${cur.y}${cur.hasH ? '' : ' · 高随内容'}`;
+      const mk = (label, axis, min, max) => {
+        const wrap = document.createElement('label');
+        const t = document.createElement('span');
+        t.textContent = label;
+        const r = document.createElement('input');
+        r.type = 'range';
+        r.min = String(min);
+        r.max = String(max);
+        r.step = '1';
+        r.value = String(Math.min(max, Math.max(min, cur[axis])));
+        r.title = `这一块的${label}`;
+        const v = document.createElement('b');
+        v.textContent = r.value + 'px';
+        r.addEventListener('input', () => {
+          const px = Number(r.value);
+          v.textContent = px + 'px';
+          Store.mutate((c) => {
+            c.layout = c.layout || { grid: Board.grid(), modules: {} };
+            c.layout.modules = c.layout.modules || {};
+            c.layout.modules[key] = Object.assign({}, c.layout.modules[key], { [axis]: px });
+          });
+          Board.render();
+        });
+        wrap.append(t, r, v);
+        return wrap;
+      };
+      const box = document.createElement('span');
+      box.className = 'size-set';
+      box.append(mk('宽', 'w', spec.min[0], spec.max[0]), mk('高', 'h', spec.min[1], spec.max[1]));
+      li.append(strong, grow, box);
+      ul.appendChild(li);
+    }
   },
 
   syncSettings() {
@@ -3123,6 +3227,11 @@ const App = {
     $('#fontVal').textContent = ap.fontSize;
     $('#gapRange').value = ap.rowGap;
     $('#gapVal').textContent = ap.rowGap;
+
+    $('#gridRange').value = Board.grid();
+    $('#gridVal').textContent = String(Board.grid());
+    $('#layoutResetBtn').disabled = !Board.isFree();
+    this.renderLayoutPane();
 
     const sw = $('#gradientSwatches');
     sw.innerHTML = '';
@@ -3370,6 +3479,23 @@ const App = {
         c.appearance.rowGap = Number(e.target.value);
       });
       this.applyAppearance();
+    });
+
+    $('#gridRange').addEventListener('input', (e) => {
+      const g = Number(e.target.value);
+      $('#gridVal').textContent = String(g);
+      Store.mutate((c) => {
+        c.layout = c.layout || { grid: g, modules: {} };
+        c.layout.grid = g;
+      });
+      // 密度变了：画布上那点底纹跟着变，下一次拖动的落点也按新格点取整
+      Board.render();
+    });
+
+    $('#layoutResetBtn').addEventListener('click', () => {
+      if (!Board.isFree()) return;
+      if (!confirm('恢复自动排版？\n（每一块各自的位置和尺寸都会清掉，主页回到默认的流式版式；容器组件的坐标会跟着换算回摆放区那一套）')) return;
+      Board.resetAuto();
     });
 
     $('#engineForm').addEventListener('submit', (e) => {

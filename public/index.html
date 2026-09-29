@@ -18,6 +18,11 @@
 <div class="boot" id="bootScreen">正在连接 NAS…</div>
 
 <div class="app" id="app" hidden>
+  <!-- 整页一张画布：一旦固定过排列（layout.modules 里有坐标），里面那四个流式容器就只剩一层空壳，
+       时钟、搜索框、天气、便签、待办、每张组件、每个分组面板都直接坐在 #board 上，共用一套坐标与叠放序。
+       一格坐标都没写过时 #board 只是个普通块，页面还是原来的流式版式。
+       右上角那对小工具按钮是 fixed 定位、不当模块，留在画布里只为了少一层结构。 -->
+  <div class="board" id="board">
   <header class="topbar">
     <nav class="topbar-actions">
       <button class="chip" type="button" id="weatherChip" hidden></button>
@@ -77,6 +82,7 @@
   <div class="dk-layer" id="dkLayer" hidden></div>
 
   <main class="groups" id="groups"></main>
+  </div><!-- /#board -->
 
   <div class="editbar" id="editBar" hidden>
     <button class="btn ghost add-group-btn" type="button" id="addGroupBtn">＋ 新建分组</button>
@@ -120,6 +126,7 @@
     </div>
     <div class="tabs" role="tablist">
       <button class="tab active" type="button" data-tab="look">外观壁纸</button>
+      <button class="tab" type="button" data-tab="board">主页排列</button>
       <button class="tab" type="button" data-tab="apps">编辑应用</button>
       <button class="tab" type="button" data-tab="docker">应用矩阵</button>
       <button class="tab" type="button" data-tab="search">搜索引擎</button>
@@ -187,6 +194,18 @@
       </div>
       <label class="row"><span>壁纸模糊 <b id="blurVal">0</b>px</span><input type="range" min="0" max="30" step="1" id="blurRange"></label>
       <label class="row"><span>壁纸压暗 <b id="dimVal">32</b>%</span><input type="range" min="0" max="90" step="2" id="dimRange"></label>
+    </div>
+
+    <div class="tab-body" data-body="board" hidden>
+      <p class="muted">这一栏只管<b>摆位</b>：主页上每一块（时钟、搜索框、天气、便签、待办、每个分组面板、每张组件与读数卡）都在同一张画布上，各带自己的坐标和尺寸。<b>开着编辑模式，鼠标按住任意一块就能拖</b>，块上缘那个小把手也能拖，右边和下边的细柄改宽、改高，右下角同时改两个。落点先对齐到网格点，<b>靠近别的块的边或中线时会自动吸上去并画一条参考线</b>（吸附赢过网格）。第一次拖动会把当时页面上每一块的位置一次性固定下来，所以松手那一刻画面不会跳；一格坐标都没写过时页面还是自动排版，谁也不带坐标。<b>容器组件与读数卡的宽高滑块在「应用矩阵」那一栏</b>，这一栏列的是其余各块。手机上这些坐标整个不参与：窄屏一律竖排，长按组件本身还是开菜单，配置里的数字一个都不动。</p>
+      <label class="row"><span>网格密度 <b id="gridVal">16</b>px</span><input type="range" min="8" max="64" step="1" id="gridRange"></label>
+      <p class="muted">密度只管拖动的落点，页面上那点格点只在编辑模式里露出来，平时看不见。</p>
+      <div class="btn-row">
+        <button class="btn" type="button" id="layoutResetBtn">恢复自动排版</button>
+      </div>
+      <h3 class="sub">每一块的精确尺寸</h3>
+      <p class="muted">拖完想再对齐几个像素，用这里两条滑块改。没动过的块高由内容自己撑。</p>
+      <ul class="app-list" id="layoutList"></ul>
     </div>
 
     <div class="tab-body" data-body="apps" hidden>
@@ -366,5 +385,7 @@
 <script src="/js/store.js"></script>
 <script src="/js/widgets.js"></script>
 <script src="/js/app.js"></script>
+<!-- board.js 里的 DK_SPEC 要读 app.js 那份 DK_TILE 的上下限，所以必须排在 app.js 后面 -->
+<script src="/js/board.js"></script>
 </body>
 </html>

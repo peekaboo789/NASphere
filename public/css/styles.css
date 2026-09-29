@@ -1489,6 +1489,92 @@ body.holding-drag .dk-tile.dragging:hover { transform: none; }
   88% { transform: translateX(2px); }
 }
 
+/* ---------- 整页一张画布：固定排列之后，每一块各摆各的 ----------
+   什么时候算「固定排列」由配置说了算（layout.modules 里有没有坐标），这里只认 html[data-free]。 */
+
+/* 画布是唯一的坐标参照物，也是唯一的层叠上下文：
+   模块上的 z 再大也超不出画布，压不到右上角那对小工具按钮、左侧导航和弹层上 */
+.board {
+  position: relative;
+  isolation: isolate;
+}
+
+/* 固定排列：顶栏、hero、便签待办、组件摆放区、分组列表这五个容器只剩一层空壳。
+   撤掉盒子但元素还在 DOM 树里，所以继承照旧（时钟那段居中本来就是从 .hero 来的），
+   主页上那些「#groups .group」「#dkLayer .dk-tile」的选择器也一个都不用改。
+   .dk-layer 本来是 position:relative——不撤掉它，组件的坐标就还得相对摆放区而不是画布。 */
+html[data-free="on"] .board > .topbar,
+html[data-free="on"] .board > .topbar-actions,
+html[data-free="on"] .board > .hero,
+html[data-free="on"] .board > .panels,
+html[data-free="on"] .board > .dk-layer,
+html[data-free="on"] .board > .groups {
+  display: contents;
+}
+
+/* 每一块：坐标、尺寸、叠放序都由 board.js 写成 CSS 变量。
+   margin 一律清掉——原来那些外边距（搜索框 30px、顶栏那一条的 padding）是给流式版式用的，
+   绝对定位再留一遍就是第二次位移，首次固定量到的位置会白白偏下去一截。
+   没写过的轴留 auto：分组面板那种「宽定了、高由组里的卡片自己撑」就靠这一条。 */
+html[data-free="on"] .mod {
+  position: absolute;
+  left: var(--x, 0px);
+  top: var(--y, 0px);
+  width: var(--w, auto);
+  height: var(--h, auto);
+  z-index: var(--z, 1);
+  margin: 0;
+}
+
+/* 搜索框固定之后不再靠 max-width 收着：坐标写多少就摆多宽，超出的那部分本来也钳掉了 */
+html[data-free="on"] .mod.search { max-width: none; }
+
+/* 格点底纹：只在「编辑模式 + 已固定排列」这一档露出来，密度跟着 layout.grid 走。
+   点很淡，是给对齐当尺子的，不当装饰 */
+html[data-free="on"][data-edit="on"] .board {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1.3px);
+  background-size: var(--grid, 16px) var(--grid, 16px);
+}
+
+/* 抓手：块上缘正中那一小条，按住它拖整块；只由 board.js 在编辑模式里挂上来 */
+.mod-grip {
+  position: absolute;
+  left: 50%;
+  top: -11px;
+  width: 46px;
+  height: 16px;
+  margin-left: -23px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.26);
+  cursor: grab;
+  touch-action: none;
+}
+.mod-grip:hover { background: rgba(255, 255, 255, 0.26); }
+
+/* 三个手柄：右边改宽、下边改高、右下角一起改。做成细条，不铺成一大块 */
+.mod-rz {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  touch-action: none;
+}
+.mod-rz:hover { background: rgba(255, 255, 255, 0.34); }
+.rz-e { right: -5px; top: 50%; width: 8px; height: 34px; margin-top: -17px; cursor: ew-resize; }
+.rz-s { bottom: -5px; left: 50%; width: 34px; height: 8px; margin-left: -17px; cursor: ns-resize; }
+.rz-se { right: -6px; bottom: -6px; width: 14px; height: 14px; border-radius: 4px; cursor: nwse-resize; }
+
+/* 磁吸参考线：吸上谁就画在谁那条线上，拖完就撤 */
+#guideLayer { position: absolute; inset: 0; pointer-events: none; z-index: 999; }
+#guideLayer .guide { position: absolute; background: var(--accent-line); opacity: 0.9; }
+#guideLayer .guide.v { top: 0; bottom: 0; width: 1px; margin-left: -0.5px; }
+#guideLayer .guide.h { left: 0; right: 0; height: 1px; margin-top: -0.5px; }
+
+/* 拖的时候整根指针换样式、别顺手选中文字 */
+body.board-drag { cursor: grabbing; -webkit-user-select: none; user-select: none; }
+body.board-drag .mod { cursor: grabbing; }
+
 /* ---------- 手机浏览器：窄屏版式 ---------- */
 
 @media (max-width: 720px) {
@@ -1524,6 +1610,25 @@ body.holding-drag .dk-tile.dragging:hover { transform: none; }
   /* 那列分组圆点是浮在内容上的，窄屏给第一个图标让开它的宽度；内核不认 :has 就只是少留一点白 */
   .side-nav { left: calc(4px + env(safe-area-inset-left)); }
   body:has(.side-nav:not([hidden])) .app { padding-left: calc(40px + env(safe-area-inset-left)); }
+
+  /* 固定排列在手机上整个不参与：画布上每一块都退回静态，那五个容器恢复各管各的版式。
+     配置里的坐标与尺寸一个都不动，回到宽屏还是你排好的样子——和上面组件那一档的处理完全一致。
+     抓手、手柄、格点、参考线也一并收掉：没有坐标可写，留着只会误导。 */
+  html[data-free="on"] .board > .topbar-actions,
+  html[data-free="on"] .board > .hero,
+  html[data-free="on"] .board > .panels,
+  html[data-free="on"] .board > .dk-layer,
+  html[data-free="on"] .board > .groups { display: block; }
+  html[data-free="on"] .board > .panels { display: grid; }
+  html[data-free="on"] .board > .dk-layer { display: flex; }
+  html[data-weather="on"][data-free="on"] .board > .topbar { display: flex; }
+  html[data-free="on"] .mod { position: static; left: auto; top: auto; z-index: auto; }
+  html[data-free="on"] .mod:not(.dk-tile):not(.search) { width: auto; height: auto; }
+  /* 组件回到摆放区那一套尺寸变量上（画布那套 --w / --h 这一档不作数），搜索框恢复靠 auto 边距居中 */
+  html[data-free="on"] .dk-tile.mod { width: min(var(--dk-tile-w, 250px), 100%); height: var(--dk-tile-h, 118px); }
+  html[data-free="on"] .mod.search { max-width: 860px; margin: 18px auto 0; }
+  .mod-grip, .mod-rz, #guideLayer { display: none; }
+  html[data-free="on"][data-edit="on"] .board { background-image: none; }
 }
 
 /* ---------- 手机浏览器：没有悬停这件事 ---------- */

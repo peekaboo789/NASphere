@@ -37,6 +37,8 @@ const LIM = {
   resRows: 40,
   engines: 40,
   todos: 300,
+  // 排列那一栏能攒下的模块数：分组上限 + 五个固定部件，留点余量，超出的直接丢
+  layoutModules: 200,
 };
 
 // 容器组件各自摆在主页上，长宽和坐标都按 px 存：这里给单张组件的范围，前端的滑块照这一套给刻度。
@@ -53,6 +55,85 @@ const DK = {
   canvasW: 1440,
   gap: 16,
 };
+
+/* ---------- 主页排列：整页一张画布，每块模块各带自己的坐标尺寸 ----------
+   模块的键只有这几类：clock / search / weather / notes / todos / group:<分组 id>。
+   容器组件与读数卡不住这一栏——它们本来就各带 x/y/w/h，住在 docker.items 里，
+   跟这些模块共用同一张画布、同一套叠放序（z）。
+
+   「摆过」与「没摆过」的区别就在这四个数上：一个都没给 = 没摆过，这一项不写进配置，
+   前端让这块留在文档流里按自动排版画。所以出厂配置的 modules 是个空对象——
+   谁都没拖过时，页面就是默认那套自动排版，一个坐标都不用写死。
+
+   给了的数按轴各存各的：只给宽就给宽，高没给就还是自动高（内容撑多高就多高）。
+   x / y 没给按 0 算。 */
+const LAY = {
+  gridMin: 8,
+  gridMax: 64,
+  gridDef: 16,
+  posMin: 0,
+  posMax: 4000,
+  zMin: 1,
+  zMax: 4000,
+};
+
+// 每块模块的宽高上下限。下限不是审美值，是「再小就装不下它自己的内容」那条线。
+// 每一块能给的尺寸上下限。上限一律比「画布最宽能有多大」（1440 内容宽减内边距 ≈ 1380）留余量：
+// 首次固定写的是当场量到的实际宽，钳一下就等于把用户摆好的画面挪了一格。
+const LAY_MODS = {
+  clock: { w: [180, 1600], h: [60, 900] },
+  search: { w: [240, 1600], h: [40, 200] },
+  weather: { w: [60, 480], h: [32, 160] },
+  notes: { w: [240, 1600], h: [140, 900] },
+  todos: { w: [240, 1600], h: [140, 900] },
+  group: { w: [260, 1600], h: [120, 2400] },
+};
+const LAY_FIXED = new Set(['clock', 'search', 'weather', 'notes', 'todos']);
+const LAY_GROUP_RE = /^group:[A-Za-z0-9_-]{1,40}$/;
+// 关掉的部件不该把坐标留在配置里积灰：撤下天气就顺手清掉 weather 那一格
+const LAY_WIDGET_KEY = { clock: 'clock', weather: 'weather', notes: 'notes', todos: 'todos' };
+
+function layBox(key) {
+  if (key.startsWith('group:')) return LAY_MODS.group;
+  return LAY_MODS[key] || null;
+}
+
+// 一块模块的四个数 + 叠放序：只钳制确实给了的那些，一个都没给返回 null（= 没摆过）
+function normLayoutBox(key, raw, groupIds) {
+  const spec = layBox(key);
+  if (!spec) return null;
+  // 分组删了、部件关了，坐标就跟着走：认不出的键一律不落地
+  if (key.startsWith('group:') && !groupIds.has(key.slice(6))) return null;
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const x = num(o.x, LAY.posMin, LAY.posMax, NaN);
+  const y = num(o.y, LAY.posMin, LAY.posMax, NaN);
+  const w = num(pick(o, ['w', 'width']), spec.w[0], spec.w[1], NaN);
+  const h = num(pick(o, ['h', 'height']), spec.h[0], spec.h[1], NaN);
+  if (!Number.isFinite(x) && !Number.isFinite(y) && !Number.isFinite(w) && !Number.isFinite(h)) return null;
+  const out = { x: Math.round(Number.isFinite(x) ? x : 0), y: Math.round(Number.isFinite(y) ? y : 0) };
+  if (Number.isFinite(w)) out.w = Math.round(w);
+  if (Number.isFinite(h)) out.h = Math.round(h);
+  const z = num(o.z, LAY.zMin, LAY.zMax, NaN);
+  if (Number.isFinite(z)) out.z = Math.round(z);
+  return out;
+}
+
+function normLayout(raw, groupIds, widgets) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const boxes = src.modules && typeof src.modules === 'object' && !Array.isArray(src.modules) ? src.modules : {};
+  const modules = {};
+  for (const key of Object.keys(boxes).slice(0, LIM.layoutModules)) {
+    if (LAY_FIXED.has(key)) {
+      const on = LAY_WIDGET_KEY[key] ? widgets[LAY_WIDGET_KEY[key]] : true;
+      if (!on) continue;
+    } else if (!LAY_GROUP_RE.test(key)) {
+      continue;
+    }
+    const box = normLayoutBox(key, boxes[key], groupIds);
+    if (box) modules[key] = box;
+  }
+  return { grid: Math.round(num(src.grid, LAY.gridMin, LAY.gridMax, LAY.gridDef)), modules };
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -249,6 +330,10 @@ const withDkBox = (out, from, cur) => {
   const s = from && typeof from === 'object' ? from : out;
   out.w = Math.round(num(pick(s, ['w', 'width']), DK.tileMinW, DK.tileMaxW, DK.tileDefW));
   out.h = Math.round(num(pick(s, ['h', 'height']), DK.tileMinH, DK.tileMaxH, DK.tileDefH));
+  // 叠放序：整页一张画布之后，组件要和分组面板、时钟那些块比同一个 z，光靠数组先后不够用。
+  // 没写过 z 的老配置不补这个键——前端按数组先后画，行为跟从前一模一样，谁被拖过谁才有 z。
+  const z = num(pick(s, ['z', 'layer']), LAY.zMin, LAY.zMax, NaN);
+  if (Number.isFinite(z)) out.z = Math.round(z);
   const x = num(pick(s, ['x']), DK.posMin, DK.posMax, NaN);
   const y = num(pick(s, ['y']), DK.posMin, DK.posMax, NaN);
   if (Number.isFinite(x) || Number.isFinite(y)) {
@@ -361,6 +446,8 @@ function defaultConfig() {
     },
     notes: { text: '', todos: [] },
     weather: { enabled: true, city: '上海', lat: 31.2304, lon: 121.4737 },
+    // 主页排列：出厂一个坐标都不写，整页走自动排版。谁被拖过，那一块才进 modules
+    layout: { grid: LAY.gridDef, modules: {} },
   };
 }
 
@@ -426,6 +513,14 @@ function sanitize(raw) {
 
   const defId = cleanId(src.search?.default, '');
   const list = engines.length ? engines : base.search.engines.map((e) => ({ ...e }));
+  // 部件开关先算出来：排列那一栏要拿它清掉「已经关掉的部件」留下的坐标
+  const widgets = {
+    clock: ap.widgets?.clock !== false,
+    notes: ap.widgets?.notes === true,
+    todos: ap.widgets?.todos === true,
+    weather: ap.widgets?.weather !== false,
+  };
+  const weatherOn = src.weather ? Boolean(src.weather.enabled) : true;
 
   return {
     version: 1,
@@ -440,12 +535,7 @@ function sanitize(raw) {
       clock24: ap.clock24 !== false,
       showSeconds: Boolean(ap.showSeconds),
       iconTemplate: urlish(ap.iconTemplate) || base.appearance.iconTemplate,
-      widgets: {
-        clock: ap.widgets?.clock !== false,
-        notes: ap.widgets?.notes === true,
-        todos: ap.widgets?.todos === true,
-        weather: ap.widgets?.weather !== false,
-      },
+      widgets,
       wallpaper: {
         kind: wpKind,
         value:
@@ -474,12 +564,14 @@ function sanitize(raw) {
       todos,
     },
     weather: {
-      enabled: src.weather ? Boolean(src.weather.enabled) : true,
+      enabled: weatherOn,
       // 城市名只能从搜索结果里来，不存在「故意留空」：没写就跟着下面那对默认经纬度走
       city: txt(src.weather?.city, LIM.name) || base.weather.city,
       lat: num(src.weather?.lat, -90, 90, 31.2304),
       lon: num(src.weather?.lon, -180, 180, 121.4737),
     },
+    // 整页排列：网格密度 + 各模块的坐标尺寸。没拖过 = 这一栏空着，页面走自动排版
+    layout: normLayout(src.layout, groupIds, { ...widgets, weather: widgets.weather && weatherOn }),
   };
 }
 
