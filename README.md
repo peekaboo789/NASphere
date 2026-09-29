@@ -132,7 +132,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.1.0
+镜像：ghcr.io/peekaboo789/nasphere:1.2.0
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -203,7 +203,7 @@ chmod +x deploy.sh
 ./deploy.sh --tag 1.2.0
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.1.0`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.0`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -260,7 +260,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.1.0`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.0`，拉下来直接起容器。
 
 默认访问：
 
@@ -293,8 +293,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.1.0-linux-amd64.tar.gz
-docker tag local/nasphere:1.1.0 ghcr.io/peekaboo789/nasphere:1.1.0
+docker load -i nasphere-1.2.0-linux-amd64.tar.gz
+docker tag local/nasphere:1.2.0 ghcr.io/peekaboo789/nasphere:1.2.0
 docker compose up -d
 ```
 
@@ -306,10 +306,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.1.0 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.0 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.1.0
+docker pull ghcr.io/peekaboo789/nasphere:1.2.0
 ```
 
 然后：
@@ -323,7 +323,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.1.0
+  ghcr.io/peekaboo789/nasphere:1.2.0
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -378,7 +378,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.1.0-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.0-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -1578,7 +1578,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.1.0`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.2.0`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1831,6 +1831,44 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.2.0
+
+主页整页变成一张画布：编辑模式下按住任意一块就能拖到任意位置，右边、下边、右下角三根柄分别改宽、改高、同时改，全程不用碰配置文件。
+
+**一套坐标管全站**
+
+时钟、搜索框、天气、便签、待办、每一个分组面板、每一张容器组件与读数卡，共用 `layout.modules` 这一套 `{x, y, w, h, z}`，z 就是叠放序，谁最后拖过谁盖在上面。容器组件与读数卡**不往 `layout.modules` 里塞**——那四个数继续写在它们自己那条 `docker.items` 里，只是固定排列之后按「相对画布」来读，同一份数不留两处。
+
+**落点：格点为底，参考线磁吸优先**
+
+```text
+网格密度　8–64px，出厂 16（设置 → 主页排列）
+磁吸判定　6px
+```
+
+别的块的左边 / 中线 / 右边（上下同理）落在 6px 之内就吸上去，同时把那条参考线画出来；吸不上才落到格点。松手参考线就撤。页面上那层很淡的格点只在「编辑模式 + 已经固定排列」这一档露出来，不当装饰。
+
+**第一次拖动不跳**
+
+一格坐标都没写过时，页面还是原来的自动排版。第一次拖任何一块，会把当场量到的每一块矩形一次性写进配置再重画，所以松手那一刻看到的仍是原来那幅画，只是从此每块都有了坐标。分组面板只写宽不写高——高继续由组里的卡片自己撑，以后往组里加应用不用重摆。
+
+想退回去：设置 → 主页排列 → 恢复自动排版。坐标一格不留，组件那一份会从画布坐标换算回摆放区坐标，配置里不会留下半套数。
+
+**手机上这些坐标整个不参与**
+
+720px 以下一律竖排：块退回流式，抓手与手柄不出现，配置里的数字既不生效也不会被改动，切回宽屏照原样摆。宽屏触屏上挪块走抓手和手柄，长按块本体还是打开右键菜单。
+
+**顺带修两处会被这套画布带出来的老问题**
+
+- 左侧导航的「当前分组」以前按分组数组的顺序认，摆过之后数组序不再等于从上往下的视觉序，高亮会滞后或跳错。现在按量到的位置取「越过那条线里面最近的那一块」，两头兜底也按视觉位置认，不再按数组首尾。
+- 宽屏触屏上按住抓手拖组件时，原来那套 420ms 长按计时器会在松手那一点再弹一张右键菜单出来。现在画布正拖着这一张就不再弹，落点交给画布一次写完。
+
+**服务端钳的是同一张表**
+
+`layout.grid` 只收 8–64，坐标 0–4000，叠放序 1–4000，坐标键最多 200 个；部件关掉（`widgets.*`、`weather.enabled`）或者分组删掉之后，它那格坐标跟着清掉，认不出的键丢掉。上下限在前后端各写了一份，两边对不上就会出现「页面上摆好了、存进去被钳一下」的跳位，所以这张表的比对做成了脚本：把两边的常量从源码里抠出来逐键比，再配一条注入违规的负向控制（把服务端一处上限改小、滑块区间改窄，脚本必须正好报出那两处不一致）。
+
+详见「🧭 整页拖拽摆放」。
 
 ## v1.1.0
 
