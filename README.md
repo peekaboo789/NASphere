@@ -132,7 +132,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.2.0
+镜像：ghcr.io/peekaboo789/nasphere:1.2.1
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -200,10 +200,10 @@ chmod +x deploy.sh
 在安装目录里执行：
 
 ```bash
-./deploy.sh --tag 1.2.0
+./deploy.sh --tag 1.2.1
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.0`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.1`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -260,7 +260,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.0`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.1`，拉下来直接起容器。
 
 默认访问：
 
@@ -293,8 +293,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.2.0-linux-amd64.tar.gz
-docker tag local/nasphere:1.2.0 ghcr.io/peekaboo789/nasphere:1.2.0
+docker load -i nasphere-1.2.1-linux-amd64.tar.gz
+docker tag local/nasphere:1.2.1 ghcr.io/peekaboo789/nasphere:1.2.1
 docker compose up -d
 ```
 
@@ -306,10 +306,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.0 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.1 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.2.0
+docker pull ghcr.io/peekaboo789/nasphere:1.2.1
 ```
 
 然后：
@@ -323,7 +323,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.2.0
+  ghcr.io/peekaboo789/nasphere:1.2.1
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -378,7 +378,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.0-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.1-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -1607,7 +1607,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.2.0`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.2.1`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1648,10 +1648,10 @@ dat/
 修改数据目录。
 
 ```bash
-./deploy.sh --tag 1.2.0
+./deploy.sh --tag 1.2.1
 ```
 
-指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.0`。
+指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.1`。
 
 ```bash
 ./deploy.sh --dry-run
@@ -1660,7 +1660,7 @@ dat/
 只显示操作，不执行。
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.0-linux-arm64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.1-linux-arm64.tar.gz
 ```
 
 使用离线镜像，跳过 `docker pull`。
@@ -1860,6 +1860,29 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.2.1
+
+主页上每张卡片的右键菜单里加了一格「✎ 编辑」，手机上长按同一个位置。它打开的就是「设置」里那个弹层，所以改一张卡不用先把设置翻开。
+
+网址应用卡：
+
+```text
+打开内网 / 外网链接
+复制内网 / 外网链接
+编辑
+移到本组最前
+移到本组最后
+移除
+```
+
+容器组件在启停那三项后面多同一格「编辑」；NAS 资源读数卡那一路只有「编辑」与「移除组件」两格，启停三项本来就不属于它。
+
+「编辑」只管这张卡自己的字段：名称、内外网两条网址、备注、图标、所属分组，容器组件多一个绑哪个容器，读数卡多一个每一行的小名。点保存才写进 `data/config.json`，点取消什么都不落。主页、「设置 → 编辑应用」那列、「应用矩阵」栏会一起刷新。**新建还是只在设置里**：右键没有「＋ 新建」，「设置 → 编辑应用 → ＋ 新建应用」和「容器一览」那两入口一个都没动。
+
+顺手修了一个跟着整页画布出问题的老写法：这个弹层保存时是整条重建那一项，长宽和坐标早就原样带回了，唯独叠放序 `z` 没带上，而服务端只在收到的那一条本来就写着 `z` 时才保留它——于是每编辑一次就把那张组件压回数组先后那一档，看起来像「改个名字怎么把卡片压到别人底下了」。现在 `z` 和那四个数一起带回，编辑一次不动它们中的任何一个。
+
+详见「🖱️ 卡片拖拽」「📦 Docker 容器组件」「📊 NAS 资源」。
 
 ## v1.2.0
 
