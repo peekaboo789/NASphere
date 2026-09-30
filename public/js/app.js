@@ -1632,15 +1632,9 @@ const App = {
       box.textContent = link.icon;
       return box;
     }
-    let src = '';
-    if (link.iconKind === 'auto') {
-      // favicon 服务取不到内网 IP，优先用外网网址的域名
-      const domain = domainOf(link.url || link.urlLan || '');
-      src = domain ? String(Store.cfg.appearance.iconTemplate || '').replace('{domain}', domain) : '';
-    } else if (link.iconKind === 'image') {
-      src = link.icon || '';
-    }
-    if (!src) {
+    // 写死的顺序：手动/上传的那张 → 站点自己的 ico（内网在前）→ favicon 模板；全落空才首字母
+    const srcs = iconSrcs(link, Store.cfg.appearance.iconTemplate);
+    if (!srcs.length) {
       fallback();
       return box;
     }
@@ -1649,8 +1643,14 @@ const App = {
     img.alt = '';
     img.loading = 'lazy';
     img.decoding = 'async';
-    img.addEventListener('error', fallback);
-    img.src = src;
+    let at = 0;
+    img.addEventListener('error', () => {
+      // 每一档失败就换下一档：站方没放 ico、页面是 https 而图标是内网 http（混合内容被拦）都算在这一档失败里
+      at += 1;
+      if (at < srcs.length) img.src = srcs[at];
+      else fallback();
+    });
+    img.src = srcs[0];
     box.appendChild(img);
     return box;
   },
@@ -2200,6 +2200,8 @@ const App = {
     $('#ipEmoji').hidden = kind !== 'emoji';
     $('#ipImage').hidden = kind !== 'image';
     $('#ipAuto').hidden = kind !== 'auto';
+    // 抓取入口只在有网址可抓的两档出现；读数卡没有网址，永远不给它
+    $('#ipFetch').hidden = (kind !== 'auto' && kind !== 'image') || Boolean(this.linkDraft.resMode);
   },
 
   paintLinkPreview() {
@@ -2306,6 +2308,31 @@ const App = {
         this.paintLinkPreview();
       });
     }
+    // 让服务端按写死的顺序抓一次：抓回来只把草稿改成固定图标，点保存才进配置
+    $('#lkFetch').addEventListener('click', async () => {
+      const btn = $('#lkFetch');
+      if (btn.disabled) return;
+      const url = $('#lkUrl').value.trim();
+      const urlLan = $('#lkUrlLan').value.trim();
+      if (!url && !urlLan) return this.toast('先填网址，才有站点图标可抓', 2500, true);
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '抓取中…';
+      try {
+        const r = await Api.fetchIcon(url, urlLan);
+        this.linkDraft.icon = r.url;
+        this.linkDraft.iconKind = 'image';
+        this.setLinkIconKind('image');
+        $('#lkImage').value = r.url;
+        this.paintLinkPreview();
+        this.toast(`已抓到「${r.label}」那一张，保存后生效`, 3600);
+      } catch (e) {
+        this.toast(e.message, 6000, true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    });
     for (const sel of ['#lkUrl', '#lkUrlLan', '#lkEmoji', '#lkImage', '#lkTitle']) {
       $(sel).addEventListener('input', () => this.paintLinkPreview());
     }

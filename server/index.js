@@ -262,6 +262,51 @@ const iconSrc = (v) => {
   return /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]{1,40000}$/i.test(s) ? s : urlish(s);
 };
 
+/* === icon-order begin ===
+   这一整块在 server/index.js 与 public/js/store.js 里各有一份，逐字相同（有脚本按字节比对），
+   所以里面只允许用 new URL / String 这类两边都有的东西，不许调 urlish、hostOf、domainOf。
+   取图标的默认顺序写死在这里，不加开关：
+     1. 手动填的或上传到 NAS 的那张（image 档，只有前端用得上，见 store.js 的 iconSrcs）
+     2. 站点自己的 /favicon.ico —— 内网网址在前、外网网址在后，ico 优先
+     3. appearance.iconTemplate（默认 icon.horse），这是整条顺序里唯一能在设置里改的一档
+   拿不到就往后走，全都落空才回退首字母。emoji / letter 两档是用户明确选定的，不参与级联。 */
+const faviconOf = (url) => {
+  const s = String(url || '').trim();
+  // 只认绝对的 http(s) 地址：相对路径、//host/x、magnet、data 这些拼不出 favicon
+  if (!/^https?:\/\//i.test(s)) return '';
+  let u;
+  try {
+    u = new URL(s);
+  } catch {
+    return '';
+  }
+  // 协议、主机、端口整个照抄，只把路径换成 /favicon.ico：内网 http://192.168.1.100:5000 也照拼
+  return u.host ? u.protocol + '//' + u.host + '/favicon.ico' : '';
+};
+
+const iconDomainOf = (url) => {
+  try {
+    return new URL(String(url || '').trim()).hostname;
+  } catch {
+    return '';
+  }
+};
+
+const iconSourceList = (link, template) => {
+  const out = [];
+  const push = (url, label) => {
+    if (url && !out.some((s) => s.url === url)) out.push({ url, label });
+  };
+  push(faviconOf(link.urlLan), '内网站点 ico');
+  push(faviconOf(link.url), '外网站点 ico');
+  // 模板档优先用外网网址的域名：公共 favicon 服务够不着内网 IP
+  const host = iconDomainOf(link.url) || iconDomainOf(link.urlLan);
+  const tpl = String(template || '').trim();
+  if (host && tpl) push(tpl.replace('{domain}', host), 'favicon 模板');
+  return out;
+};
+/* === icon-order end === */
+
 // 图标字段：分组没有网址可猜，所以兜底档由调用方给
 const normIcon = (o, defaultKind) => {
   const iconRaw = String(pick(o, ['icon', 'emoji', 'img', 'image', 'logo', 'src'])).trim();
@@ -725,7 +770,8 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https:",
+  // http: 是主页级联图标要的：内网站点大多只有 http://192.168.x.x:port，站点自己的 /favicon.ico 直接进 img
+  "img-src 'self' data: http: https:",
   "connect-src 'self' https://api.open-meteo.com https://geocoding-api.open-meteo.com",
   "font-src 'self'",
   "form-action 'self'",
@@ -1783,6 +1829,121 @@ function handleMediaUpload(req, res) {
   }).catch((e) => send(res, e.status || 400, { error: e.message }));
 }
 
+/* ---------- 抓取站点图标：页面在 https 下打不开内网 http 图标时，由服务端替它出网 ----------
+   抓回来的图和上传的图走同一套存法（sha1 内容寻址 + UPLOAD_DIR + /media/），
+   所以抓完只是草稿，点保存才进配置；没保存就被 GC 清掉也不丢什么。 */
+const ICON_MAX_BYTES = 2 * 1024 * 1024;
+const ICON_TIMEOUT = 5000;
+const ICON_MAX_REDIRECTS = 3;
+const ICON_UA = 'Mozilla/5.0 (NASphere icon fetch)';
+
+/* 只按文件头认格式，不信 Content-Type：favicon.ico 被报成别 MIME 是常态，
+   反过来把登录页 HTML 报成 image/png 的更多（反代、门户、302 到登录页）。 */
+const iconSniffers = [
+  ['.ico', (b) => b.length > 6 && b[0] === 0 && b[1] === 0 && b[2] === 1 && b[3] === 0 && (b[4] === 1 || b[4] === 2)],
+  ['.png', (b) => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a],
+  ['.jpg', (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
+  ['.gif', (b) => b.length > 6 && b.slice(0, 4).toString('latin1') === 'GIF8'],
+  ['.webp', (b) => b.length > 12 && b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP'],
+  ['.avif', (b) => b.length > 12 && b.slice(4, 8).toString('latin1') === 'ftyp' && /^av[isio]/i.test(b.slice(8, 12).toString('latin1'))],
+  // SVG 是文本，只能松认：开头得是 <svg / <?xml，并且不带脚本、外部实体
+  ['.svg', (b) => {
+    const s = b.slice(0, 256).toString('utf8').replace(/^\uFEFF/, '').trimStart();
+    return (s.startsWith('<svg') || s.startsWith('<?xml')) && !/<script|<!ENTITY|<!DOCTYPE/i.test(b.slice(0, 2048).toString('utf8'));
+  }],
+];
+
+function sniffIcon(buf) {
+  for (const [ext, test] of iconSniffers) if (test(buf)) return { buf, ext };
+  return null;
+}
+
+function fetchIconAt(target, redirectsLeft) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try {
+      u = new URL(String(target));
+    } catch {
+      return reject(new Error('地址不合法'));
+    }
+    // 这一条是本机自己去连，协议收紧到 http/https：file:// 之类绝不允许从这里出去
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return reject(new Error('只走 http / https'));
+    const lib = u.protocol === 'https:' ? https : http;
+    const req = lib.get(
+      u,
+      { headers: { 'User-Agent': ICON_UA, Accept: 'image/*,*/*;q=0.8' }, timeout: ICON_TIMEOUT },
+      (up) => {
+        const loc = up.headers && up.headers.location;
+        if (up.statusCode >= 300 && up.statusCode < 400 && loc) {
+          up.resume();
+          if (redirectsLeft <= 0) return reject(new Error('重定向太多'));
+          let next = '';
+          try {
+            next = new URL(loc, u).href;
+          } catch {
+            return reject(new Error('重定向地址不合法'));
+          }
+          return resolve(fetchIconAt(next, redirectsLeft - 1));
+        }
+        if (up.statusCode !== 200) {
+          up.resume();
+          return reject(new Error('HTTP ' + up.statusCode));
+        }
+        const chunks = [];
+        let size = 0;
+        up.on('data', (c) => {
+          size += c.length;
+          if (size > ICON_MAX_BYTES) return req.destroy(new Error('图标超过 2MB'));
+          chunks.push(c);
+        });
+        up.on('end', () => {
+          const got = sniffIcon(Buffer.concat(chunks));
+          if (got) resolve(got);
+          else reject(new Error('返回的不是可识别的图标'));
+        });
+        up.on('error', reject);
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('连接超时')));
+    req.on('error', (e) => reject(e));
+  });
+}
+
+async function handleIconFetch(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+  } catch {
+    return send(res, 400, { error: '请求格式错误' });
+  }
+  // 网址由调用方给（就是这张卡片自己填的那两条），模板只认配置里那一份：
+  // 前端传什么都不看，免得这个接口被人拿来打任意地址。
+  const link = {
+    url: urlish(pick(body, ['url', 'href', 'link'])),
+    urlLan: urlish(pick(body, ['urlLan', 'url_lan', 'lanUrl', 'lan_url'])),
+  };
+  const sources = iconSourceList(link, readConfig().appearance.iconTemplate);
+  if (!sources.length) return send(res, 400, { error: '内网 / 外网网址至少填一条 http(s) 地址，才有站点图标可抓' });
+  const tried = [];
+  for (const src of sources) {
+    try {
+      const got = await fetchIconAt(src.url, ICON_MAX_REDIRECTS);
+      const name = crypto.createHash('sha1').update(got.buf).digest('hex').slice(0, 20) + got.ext;
+      const file = path.join(UPLOAD_DIR, name);
+      // 内容寻址：同一个图标反复抓只占一份文件，写之前看一眼，省一次落盘
+      if (!fs.existsSync(file)) fs.writeFileSync(file, got.buf);
+      return send(res, 200, { url: '/media/' + name, label: src.label, source: src.url, tried });
+    } catch (e) {
+      tried.push({ label: src.label, url: src.url, error: String((e && e.message) || e).slice(0, 120) });
+    }
+  }
+  // 全都落空时不装作成功：把每一档试到什么、为什么不算，原样带回给页面
+  send(res, 404, {
+    error: '按顺序试过了，都没拿到图标：' + tried.map((t) => `${t.label}（${t.error}）`).join('、'),
+    tried,
+  });
+}
+
 const bingCache = { at: 0, url: '' };
 
 function handleBing(res) {
@@ -1963,6 +2124,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (p === '/api/media' && req.method === 'POST') return handleMediaUpload(req, res);
+
+  // 按写死的顺序替这张卡片抓一次站点图标，存成上传目录里的固定图标
+  if (p === '/api/icon/fetch' && req.method === 'POST') return handleIconFetch(req, res);
 
   // 磁贴要的数据：只看配置里挂出来的那几个容器，客户端不能自己点名要别人机器上的容器
   if (p === '/api/docker/state' && req.method === 'GET') {

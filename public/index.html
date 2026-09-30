@@ -325,7 +325,13 @@
       </div>
       <div class="icon-pane" id="ipEmoji"><input class="field" id="lkEmoji" placeholder="🎬" maxlength="4"></div>
       <div class="icon-pane" id="ipImage"><input class="field" id="lkImage" placeholder="https://... 或 /media/xxx.png"></div>
-      <div class="icon-pane" id="ipAuto"><p class="muted">按「设置 → 小组件」里的 favicon 模板自动取站点图标，取不到时回退首字母。</p></div>
+      <div class="icon-pane" id="ipAuto"><p class="muted">按写死的顺序依次取：站点自己的 /favicon.ico（内网网址在前、外网网址在后）→「设置 → 小组件」里的 favicon 模板；两档都没命中才用名称首字母。主页上每张卡都这么试，不用点任何按钮。</p></div>
+      <div class="icon-pane" id="ipFetch">
+        <div class="fetch-row">
+          <button class="btn" type="button" id="lkFetch">按顺序抓取图标并存到 NAS</button>
+          <p class="muted">抓到了就把这张卡改成固定图标（点保存才生效）。想退回去：切到「站点图标」那一档，坐标里的图片链接清掉即可。</p>
+        </div>
+      </div>
       <div class="icon-pane" id="ipUpload">
         <div class="upload-drop" id="iconDrop">把图片拖到这里，或选择本地文件上传（图片会存到 NAS，所有设备共用）<input type="file" id="lkFile" accept="image/*,.ico"></div>
       </div>

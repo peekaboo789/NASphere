@@ -33,6 +33,62 @@ const domainOf = (url) => {
   }
 };
 
+/* === icon-order begin ===
+   这一整块在 server/index.js 与 public/js/store.js 里各有一份，逐字相同（有脚本按字节比对），
+   所以里面只允许用 new URL / String 这类两边都有的东西，不许调 urlish、hostOf、domainOf。
+   取图标的默认顺序写死在这里，不加开关：
+     1. 手动填的或上传到 NAS 的那张（image 档，只有前端用得上，见 store.js 的 iconSrcs）
+     2. 站点自己的 /favicon.ico —— 内网网址在前、外网网址在后，ico 优先
+     3. appearance.iconTemplate（默认 icon.horse），这是整条顺序里唯一能在设置里改的一档
+   拿不到就往后走，全都落空才回退首字母。emoji / letter 两档是用户明确选定的，不参与级联。 */
+const faviconOf = (url) => {
+  const s = String(url || '').trim();
+  // 只认绝对的 http(s) 地址：相对路径、//host/x、magnet、data 这些拼不出 favicon
+  if (!/^https?:\/\//i.test(s)) return '';
+  let u;
+  try {
+    u = new URL(s);
+  } catch {
+    return '';
+  }
+  // 协议、主机、端口整个照抄，只把路径换成 /favicon.ico：内网 http://192.168.1.100:5000 也照拼
+  return u.host ? u.protocol + '//' + u.host + '/favicon.ico' : '';
+};
+
+const iconDomainOf = (url) => {
+  try {
+    return new URL(String(url || '').trim()).hostname;
+  } catch {
+    return '';
+  }
+};
+
+const iconSourceList = (link, template) => {
+  const out = [];
+  const push = (url, label) => {
+    if (url && !out.some((s) => s.url === url)) out.push({ url, label });
+  };
+  push(faviconOf(link.urlLan), '内网站点 ico');
+  push(faviconOf(link.url), '外网站点 ico');
+  // 模板档优先用外网网址的域名：公共 favicon 服务够不着内网 IP
+  const host = iconDomainOf(link.url) || iconDomainOf(link.urlLan);
+  const tpl = String(template || '').trim();
+  if (host && tpl) push(tpl.replace('{domain}', host), 'favicon 模板');
+  return out;
+};
+/* === icon-order end === */
+
+// 一张卡片要依次试的图标地址：手动/上传的那张排最前，后面接上面写死的三档。
+// emoji / letter 两档是用户明确选的，一个地址都不给，页面直接画文字。
+const iconSrcs = (link, template) => {
+  const kind = link.iconKind;
+  if (kind === 'emoji' || kind === 'letter') return [];
+  const out = [];
+  if (kind === 'image' && link.icon) out.push(link.icon);
+  for (const s of iconSourceList(link, template)) if (!out.includes(s.url)) out.push(s.url);
+  return out;
+};
+
 // 两条都填了就按当前模式各取一边；只填了一条时两种模式都用这一条，卡片不再点不动
 const linkHref = (link, mode) => {
   const lan = String((link && link.urlLan) || '');
@@ -148,6 +204,8 @@ const Api = {
     const r = await Api.call('/api/media', { method: 'POST', body: { image: dataUrl } });
     return r.urls[0];
   },
+  // 让服务端按写死的顺序替这张卡抓一次图标（页面在 https 下够不着内网 http 图标时靠它）
+  fetchIcon: (url, urlLan) => Api.call('/api/icon/fetch', { method: 'POST', body: { url, urlLan } }),
 };
 
 const Store = {

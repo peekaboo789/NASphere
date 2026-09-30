@@ -974,6 +974,7 @@ select.field { max-width: 220px; }
 
 .city-picker { position: relative; display: grid; gap: 6px; }
 .upload-drop { display: grid; gap: 8px; padding: 16px; border: 1px dashed var(--field-border); border-radius: var(--radius-sm); text-align: center; font-size: 13px; color: var(--text-dim); background: var(--inset); }
+.icon-pane .fetch-row { display: grid; gap: 8px; justify-items: start; }
 .icon-preview { display: flex; align-items: center; gap: 12px; }
 .icon-preview .tile-icon { width: 46px; height: 46px; font-size: 24px; }
 
