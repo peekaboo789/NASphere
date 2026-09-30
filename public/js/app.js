@@ -994,7 +994,7 @@ const App = {
     this.renderDockerPane();
   },
 
-  // 右键给全：打开 / 复制链接 / 启动 / 停止 / 重启 / 移除。挪位置是长按直接拖，改内容在「设置 → 应用矩阵」
+  // 右键给全：打开 / 复制链接 / 启动 / 停止 / 重启 / 编辑 / 移除。挪位置是长按直接拖，长宽在「设置 → 应用矩阵」的滑块上
   openDockerCtxMenu(item, x, y) {
     const menu = $('#ctxMenu');
     menu.innerHTML = '';
@@ -1006,6 +1006,7 @@ const App = {
     // 只有查到的那一刻是运行中才给停止 / 重启，反过来才给启动；数据还没回来就全部按着
     if (isResource(item)) {
       // 资源组件没有可操作的对象，只有数字：启停那三项别出现在它身上
+      menu.appendChild(this.ctxItem('✎ 编辑', false, () => this.openLinkModal(item, '', 'res')));
       menu.appendChild(this.ctxItem('✕ 移除组件', true, () => this.removeDockerItem(item)));
     } else {
       const info = Docker.get(item.container);
@@ -1013,6 +1014,7 @@ const App = {
       menu.appendChild(this.ctxItem('▶ 启动容器', false, () => this.actContainer(item.container, 'start'), running || !info));
       menu.appendChild(this.ctxItem('■ 停止容器', true, () => this.actContainer(item.container, 'stop'), !running));
       menu.appendChild(this.ctxItem('⟳ 重启容器', false, () => this.actContainer(item.container, 'restart'), !running));
+      menu.appendChild(this.ctxItem('✎ 编辑', false, () => this.openLinkModal(item, '', true)));
       menu.appendChild(this.ctxItem('✕ 移除组件', true, () => this.removeDockerItem(item)));
     }
     menu.hidden = false;
@@ -1353,7 +1355,7 @@ const App = {
     return b;
   },
 
-  /* ---------- 卡片右键菜单：打开 / 复制链接 / 移到组首组尾 / 移除（编辑应用在「设置」里） ---------- */
+  /* ---------- 卡片右键菜单：打开 / 复制链接 / 编辑 / 移到组首组尾 / 移除 ---------- */
 
   ctxTarget: null,
 
@@ -1393,6 +1395,8 @@ const App = {
         this.toast(ok ? `已复制${netLabel}链接` : '复制失败，请手动选择复制', 2600, !ok);
       })
     );
+    // 编辑弹层是独立模态，不必先开「设置」：右键直接改这张卡，保存后主页与设置那列一起刷
+    menu.appendChild(this.ctxItem('✎ 编辑', false, () => this.openLinkModal(link, groupId)));
     const g = (Store.cfg.groups || []).find((x) => x.id === groupId);
     const links = g ? g.links : [];
     const pos = links.findIndex((l) => l.id === link.id);
@@ -2115,6 +2119,8 @@ const App = {
       rowNames: resMode && link && link.rowNames && typeof link.rowNames === 'object' ? { ...link.rowNames } : null,
       w: link && tileMode ? link.w : DK_TILE.defW,
       h: link && tileMode ? link.h : DK_TILE.defH,
+      // 叠放序不在表单里改，但得原样带回去：这个弹层保存时是整条重建，漏了 z 就等于每编辑一次就把这张卡压回数组先后那一档
+      z: link && tileMode && Number.isFinite(link.z) ? link.z : undefined,
       // 编辑已有组件时坐标原样带回去；新建那张（走「容器一览」那条路）落在最下面一张的下方
       x: link && tileMode ? link.x : this.nextDockerPos().x,
       y: link && tileMode ? link.y : this.nextDockerPos().y,
@@ -2258,6 +2264,7 @@ const App = {
           if (d.rowNames && Object.keys(d.rowNames).length) keep.rowNames = d.rowNames;
           keep.w = d.w;
           keep.h = d.h;
+          if (Number.isFinite(d.z)) keep.z = d.z;
           keep.x = d.x;
           keep.y = d.y;
           const at = c.docker.items.findIndex((l) => l.id === d.id);
@@ -2270,9 +2277,10 @@ const App = {
         if (d.urlLan) payload.urlLan = d.urlLan;
         if (d.container) payload.container = d.container;
         if (d.dockerMode) {
-          // 长宽与坐标不在这个表单里改（长宽在「应用矩阵」那行的滑块上、位置在主页长按拖），保存时原样带回去
+          // 长宽、叠放序与坐标都不在这个表单里改（长宽在「应用矩阵」那行的滑块上、位置在主页长按拖），保存时原样带回去
           payload.w = d.w;
           payload.h = d.h;
+          if (Number.isFinite(d.z)) payload.z = d.z;
           payload.x = d.x;
           payload.y = d.y;
           const i = c.docker.items.findIndex((l) => l.id === d.id);
