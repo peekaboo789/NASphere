@@ -1,0 +1,18 @@
+# 构建镜像时忽略：运行数据、本地开发产物一律不进镜像
+data/
+output/
+.env
+.git
+.gitignore
+.gitattributes
+README.md
+dev-tools/
+tests/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.log
+Dockerfile
+docker-compose.yml
+.env.example

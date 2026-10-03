@@ -1,0 +1,19 @@
+# 运行期数据（配置、数据库、播放列表、日志）不入库
+data/*
+!data/.gitkeep
+!data/output
+data/output/*
+!data/output/.gitkeep
+!data/logs
+data/logs/*
+!data/logs/.gitkeep
+
+# 部署时才知道的密钥
+.env
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+build/
+dist/

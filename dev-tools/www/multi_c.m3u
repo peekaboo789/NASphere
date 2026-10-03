@@ -1,0 +1,5 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="MS.ONLYC" tvg-name="只有源C有" group-title="多源测试",只有源C有
+http://127.0.0.1:8099/live/audio.ts?src=c
+#EXTINF:-1 tvg-id="MS.SHARED" tvg-name="跨源同名频道" group-title="多源测试",跨源同名（源C较慢）
+http://127.0.0.1:8099/rate/700000/live/test.ts

@@ -1,0 +1,29 @@
+services:
+  iptv-auto-tester:
+    build: .
+    image: iptv-auto-tester:latest
+    container_name: iptv-auto-tester
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-9001}:9001"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      DATA_DIR: /data
+      PORT: 9001
+      # 管理页 / API 的 Basic Auth 账号。ADMIN_PASSWORD 留空 = 不启用登录门禁。
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    volumes:
+      - ./data:/data
+    # ------------------------------------------------------------------
+    # IPv6 说明：Docker 默认 bridge 网络不提供 IPv6 出口，容器内测 IPv6 会全部
+    # 报“连接失败”。需要真正的 IPv6 源测速/播放时，注释掉上面的 ports: 段，
+    # 改用 host 网络（应用自己监听 0.0.0.0:9001，宿主机端口即 PORT 变量）：
+    # network_mode: host
+    # ------------------------------------------------------------------
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9001/healthz"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3

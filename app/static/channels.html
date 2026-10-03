@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>频道列表 · IPTV Auto Tester</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <header>
+      <h1>IPTV Auto Tester</h1>
+      <nav>
+        <a href="/">设置与状态</a>
+        <a href="/channels" class="active">频道列表</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>筛选</h2>
+        <div class="filters">
+          <div>
+            <label for="f-q">搜索</label>
+            <input id="f-q" type="search" placeholder="频道名 / URL" />
+          </div>
+          <div>
+            <label for="f-group">分组</label>
+            <select id="f-group"></select>
+          </div>
+          <div>
+            <label for="f-source">订阅源</label>
+            <select id="f-source"></select>
+          </div>
+          <div>
+            <label for="f-status">状态</label>
+            <select id="f-status">
+              <option value="">全部</option>
+              <option value="ok">可用</option>
+              <option value="bad">失效</option>
+              <option value="pending">未测试</option>
+            </select>
+          </div>
+          <div>
+            <label for="f-sort">排序</label>
+            <select id="f-sort">
+              <option value="name">频道名</option>
+              <option value="group">分组</option>
+              <option value="success">成功率</option>
+              <option value="speed">下载速度</option>
+              <option value="latency">延迟</option>
+              <option value="failures">连续失败</option>
+              <option value="tested">最近测试</option>
+              <option value="status">状态</option>
+              <option value="url">URL</option>
+            </select>
+          </div>
+          <div>
+            <label for="f-direction">方向</label>
+            <select id="f-direction">
+              <option value="auto">默认</option>
+              <option value="asc">升序</option>
+              <option value="desc">降序</option>
+            </select>
+          </div>
+          <div>
+            <label for="f-limit">每页</label>
+            <select id="f-limit">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+            </select>
+          </div>
+          <div>
+            <label for="f-inactive">
+              <input id="f-inactive" type="checkbox" />
+              包含本次源里已消失的频道
+            </label>
+          </div>
+        </div>
+        <p class="note" id="summary">加载中…</p>
+      </section>
+
+      <section class="card">
+        <h2>频道</h2>
+        <div style="overflow: auto">
+          <table>
+            <thead>
+              <tr>
+                <th>频道</th>
+                <th>分组</th>
+                <th>状态</th>
+                <th>协议</th>
+                <th>IP</th>
+                <th>速度</th>
+                <th>首包</th>
+                <th>总耗时</th>
+                <th>HTTP</th>
+                <th>跳转</th>
+                <th>播放列表/分片</th>
+                <th>视频/音频</th>
+                <th>编码</th>
+                <th>成功/失败</th>
+                <th>成功率</th>
+                <th>最近测试</th>
+                <th>失败原因</th>
+              </tr>
+            </thead>
+            <tbody id="rows">
+              <tr>
+                <td colspan="17" class="note">正在读取数据库…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button id="prev" class="ghost">上一页</button>
+          <span id="page-info">-</span>
+          <button id="next" class="ghost">下一页</button>
+          <button id="refresh" class="ghost">刷新</button>
+        </div>
+        <p class="note">点击任意一行可以看到这个频道的历次测速记录（含每次 IPv4 / IPv6 的结果）。</p>
+        <p class="note">
+          「跳转」这一列是检测时源站 302 了几次、最终落到哪个地址（鼠标移上去看完整地址）；
+          播放列表和分片分开两件事：m3u8 本身能读、只是个别 TS 取不到，不会把频道判成失效。
+          对外产物（iptv.m3u 等）里永远写订阅文件给的原始地址，不会改成带临时签名的最终地址。
+        </p>
+      </section>
+    </main>
+
+    <script src="/static/channels.js"></script>
+  </body>
+</html>

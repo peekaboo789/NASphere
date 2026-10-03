@@ -1,0 +1,23 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="LOCAL.TS" tvg-name="本地TS直连" tvg-logo="http://logo/ts.png" group-title="本地测试",本地TS直连
+http://127.0.0.1:8099/live/test.ts
+#EXTINF:-1 tvg-id="LOCAL.HLS" tvg-name="本地HLS" group-title="本地测试",本地HLS
+http://127.0.0.1:8099/live/test.m3u8
+#EXTINF:-1 tvg-id="LOCAL.RADIO" group-title="广播",本地广播仅音频
+http://127.0.0.1:8099/live/audio.ts
+#EXTINF:-1 tvg-id="LOCAL.FAKE" group-title="本地测试",返回200但不是流
+http://127.0.0.1:8099/live/fake.m3u8
+#EXTINF:-1 tvg-id="LOCAL.SLOW" group-title="本地测试",涓流限速源
+http://127.0.0.1:8099/live/slow.ts
+#EXTINF:-1 tvg-id="LOCAL.404" group-title="本地测试",四十不惑
+http://127.0.0.1:8099/live/missing.ts
+#EXTINF:-1 tvg-id="LOCAL.DEAD" group-title="本地测试",没人监听的端口
+http://127.0.0.1:8199/live/nothing.ts
+#EXTINF:-1 tvg-id="LOCAL.MCAST" group-title="本地测试",组播地址
+rtp://@239.1.1.1:1234
+#EXTINF:-1 tvg-id="LOCAL.VIDONLY" group-title="本地测试",只有视频没有音频
+http://127.0.0.1:8099/live/video_only.ts
+#EXTINF:-1 tvg-id="LOCAL.IPV6" group-title="本地测试",IPv6回环直连
+http://[::1]:8100/live/test.ts
+#EXTINF:-1 tvg-id="LOCAL.DUP" group-title="本地测试",重复地址应该被去重
+http://127.0.0.1:8099/live/test.ts

@@ -1,0 +1,13 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="REDIR.TS" tvg-name="重定向后的TS" group-title="重定向测试",重定向两跳后签名地址
+http://127.0.0.1:8099/redir/2/live/test.ts
+#EXTINF:-1 tvg-id="REDIR.HLS" tvg-name="重定向后的HLS" group-title="重定向测试",重定向一跳的HLS
+http://127.0.0.1:8099/redir/1/live/test.m3u8
+#EXTINF:-1 tvg-id="HLS.FIRST404" tvg-name="首片404的HLS" group-title="重定向测试",第一个分片404但后面正常
+http://127.0.0.1:8099/live/first404.m3u8
+#EXTINF:-1 tvg-id="HLS.ALLBAD" tvg-name="分片全404的HLS" group-title="重定向测试",播放列表能取到但分片全404
+http://127.0.0.1:8099/live/allmissing.m3u8
+#EXTINF:-1 tvg-id="BASE.TS" tvg-name="直连裸TS基线" group-title="重定向测试",不跳转的基线对照
+http://127.0.0.1:8099/live/test.ts
+#EXTINF:-1 tvg-id="FAKE.HTML" tvg-name="200但是HTML" group-title="重定向测试",状态码200内容却是网页
+http://127.0.0.1:8099/live/fake.m3u8

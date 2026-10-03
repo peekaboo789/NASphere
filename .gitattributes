@@ -1,0 +1,5 @@
+# 换行符统一：仓库内永远是 LF，容器里读到的一定是干净的 shell 脚本
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,7 @@
+央视,综合频道,http://127.0.0.1:8099/live/test.ts?txt=1
+央视,体育频道,http://127.0.0.1:8099/live/test.m3u8?txt=1
+广播,仅音频电台,http://127.0.0.1:8099/live/audio.ts?txt=1
+本地测试,返回200但不是流,http://127.0.0.1:8099/live/fake.m3u8?txt=1
+本地测试,四十不惑,http://127.0.0.1:8099/live/missing.ts?txt=1
+分隔符风格#!/http://127.0.0.1:8099/live/slow.ts?txt=1
+重复的央视综合频道,http://127.0.0.1:8099/live/test.ts?txt=1

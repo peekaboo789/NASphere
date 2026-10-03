@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IPTV Auto Tester</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <header>
+      <h1>IPTV Auto Tester</h1>
+      <nav>
+        <a href="/" class="active">设置与状态</a>
+        <a href="/channels">频道列表</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>配置</h2>
+        <div class="grid">
+          <div class="wide">
+            <label for="source_urls">订阅源地址（M3U / M3U8 / TXT，一行一个）</label>
+            <textarea id="source_urls" rows="4" spellcheck="false" placeholder="https://example.com/iptv.m3u&#10;https://other.example.com/live.txt"></textarea>
+            <div class="hint" id="sources-hint">
+              可以同时填多个订阅地址，程序会把它们的频道合并成一个列表：同一个播放地址只算一条；
+              同一个频道（按 tvg-id，没有 tvg-id 时按频道名）在多个源里都有时，最终 iptv.m3u 只保留实测最快的那条，
+              其余的仍会留在 iptv_all.m3u 和 results.csv 里。
+              某一个源这一轮下载失败不会影响别的源，它会继续沿用自己上次成功的那批频道。
+            </div>
+          </div>
+          <div>
+            <label for="interval_select">更新周期</label>
+            <select id="interval_select"></select>
+            <div id="custom_interval" hidden style="margin-top: 8px">
+              <label for="interval_custom">自定义分钟（1~1440）</label>
+              <input id="interval_custom" type="number" min="1" max="1440" step="1" />
+            </div>
+          </div>
+          <div>
+            <label for="concurrency">并发数</label>
+            <select id="concurrency"></select>
+          </div>
+          <div>
+            <label for="timeout_seconds">最大测试时间（秒）</label>
+            <input id="timeout_seconds" type="number" min="3" max="120" step="1" />
+          </div>
+          <div>
+            <label for="min_speed_kbps">最低下载速度（KB/s）</label>
+            <input id="min_speed_kbps" type="number" min="0" max="100000" step="50" />
+          </div>
+          <div>
+            <label for="min_success_count">最小成功次数</label>
+            <input id="min_success_count" type="number" min="1" max="1000" step="1" />
+          </div>
+          <div>
+            <label for="ip_prefer">IPv4 / IPv6</label>
+            <select id="ip_prefer"></select>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="btn-save">
+            <svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z" /><path d="M8 4v5h7" /><path d="M8 20v-6h8v6" /></svg>
+            保存配置
+          </button>
+          <button id="btn-update" class="ghost">
+            <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-3-6.2" /><path d="M20 4v5h-5" /></svg>
+            立即更新
+          </button>
+          <button id="btn-test" class="ghost">
+            <svg viewBox="0 0 24 24"><path d="M12 3v6" /><path d="M7 13l3 3 7-7" /></svg>
+            立即测速
+          </button>
+          <button id="btn-cancel" class="danger" hidden>取消当前任务</button>
+          <span id="message" class="message"></span>
+        </div>
+      </section>
+
+      <section class="card" id="progress-card" hidden>
+        <h2>实时进度</h2>
+        <div class="progress-wrap">
+          <div class="bar"><i id="progress-bar"></i></div>
+          <div class="kv" id="progress-detail"></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>当前状态</h2>
+        <div class="stats" id="stats"></div>
+        <div class="kv" id="status-detail"></div>
+        <p class="note" id="status-note"></p>
+      </section>
+
+      <section class="card">
+        <h2>订阅源</h2>
+        <div style="overflow: auto">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>地址</th>
+                <th>本轮</th>
+                <th>解析</th>
+                <th>合并后</th>
+                <th>在册频道</th>
+                <th>耗时</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody id="sources-body">
+              <tr><td colspan="8">还没有下载过订阅源</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note" id="sources-note"></p>
+      </section>
+
+      <section class="card">
+        <h2>播放器固定地址</h2>
+        <div class="links" id="output-links"></div>
+        <p class="note">播放器只用这一个地址即可，后面源失效、频道增减都由程序自动处理。</p>
+      </section>
+
+      <section class="card">
+        <h2>最近日志</h2>
+        <pre class="logs" id="logs">加载中…</pre>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

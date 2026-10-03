@@ -1,0 +1,2 @@
+央视,中文GBK频道,http://127.0.0.1:8099/live/test.ts?gbk=1
+本地测试,GBK四十不惑,http://127.0.0.1:8099/live/missing.ts?gbk=1

@@ -1,0 +1,9 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXTINF:-1 tvg-id="H8K.TS" tvg-name="M3U8订阅里的TS" group-title="格式覆盖",M3U8订阅里的TS
+http://127.0.0.1:8099/live/test.ts?src=m3u8
+#EXTINF:-1 tvg-id="H8K.RADIO" group-title="格式覆盖" tvg-logo="http://logo/radio.png",M3U8订阅里的电台
+#KODIPROP:inputstream=inputstream.adaptive
+http://127.0.0.1:8099/live/audio.ts?src=m3u8
+#EXTINF:-1,M3U8订阅里的假流
+http://127.0.0.1:8099/live/fake.m3u8?src=m3u8
