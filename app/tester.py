@@ -305,6 +305,9 @@ async def _probe_hls_segments(
 
     只要有一个分片有视频流就算「有视频」，避免第一个分片恰好无视频的误判。
     """
+    from .logging_setup import get_logger
+    _log = get_logger()
+
     merged_info: dict[str, Any] = {
         "has_video": False,
         "has_audio": False,
@@ -313,7 +316,12 @@ async def _probe_hls_segments(
         "v_resolution": "",
         "stream_count": 0,
     }
-    samples = segment_urls[:max_samples]
+    # 随机采样：如果分片数 <= max_samples 就全部探测，否则随机取 max_samples 个
+    if len(segment_urls) <= max_samples:
+        samples = list(segment_urls)
+    else:
+        samples = random.sample(segment_urls, max_samples)
+    _log.info("[HLS采样] 从 %d 个分片中采样 %d 个进行探测", len(segment_urls), len(samples))
     for seg_url in samples:
         timeout_us = int(cfg["timeout_seconds"] * 1_000_000)
         probe_cmd = [
@@ -475,6 +483,8 @@ async def test_one_family(
         if is_hls:
             # 用 urllib 通过代理获取完整播放列表（代理只负责协议族强制，不拦截这个 GET）
             import urllib.request
+            from .logging_setup import get_logger
+            _log = get_logger()
             req = urllib.request.Request(url)
             req.add_header("User-Agent", cfg["user_agent"])
             req.set_proxy(proxy_url.replace("http://", ""), "http")
@@ -482,13 +492,16 @@ async def test_one_family(
                 resp = urllib.request.urlopen(req, timeout=float(cfg["timeout_seconds"]))
                 playlist_text = resp.read(65536).decode("utf-8", errors="replace")
                 segments = _parse_hls_segments(playlist_text, url)
-                if len(segments) >= 2:
-                    random.shuffle(segments)
+                if segments:  # 只要有分片就采样（即使只有 1 个也比没有好）
+                    _log.info("[HLS检测] 解析到 %d 个分片，准备采样探测", len(segments))
                     hls_segment_info = await _probe_hls_segments(
                         cfg, proxy_url, segments, group, max_samples=3
                     )
-            except Exception:
-                pass  # 播放列表拿不到就跳过，回退到单 URL 检测
+                else:
+                    _log.warning("[HLS检测] 播放列表解析后没有发现媒体段分片: %s", url)
+            except Exception as exc:
+                _log.warning("[HLS检测] 播放列表获取失败，回退到单URL检测: %s", exc)
+                # 播放列表拿不到就跳过，回退到单 URL 检测
 
         rc, stdout, stderr, elapsed, timed_out = await _run_process(
             _probe_args(cfg, proxy_url, url), wall, group
