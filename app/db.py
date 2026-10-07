@@ -731,15 +731,17 @@ class Database:
         return data
 
     def channels_for_output(self, cfg: dict[str, Any]) -> list[dict[str, Any]]:
-        """按过滤规则取「可以进最终播放列表」的频道。"""
+        """按过滤规则取「可以进最终播放列表」的频道。
+
+        排除只有音频的频道（status='audio_only'），即使它被判定为「可用」。
+        """
         rows = self.query(
-            "SELECT * FROM channels WHERE active=1 AND status IN (?,?) "
+            "SELECT * FROM channels WHERE active=1 AND status=? "
             "AND speed_kbps >= ? AND success_count >= ? "
             "AND (elapsed_ms IS NULL OR elapsed_ms <= ?) "
             "ORDER BY source_index ASC",
             (
-                OK_STATUSES[0],
-                OK_STATUSES[1],
+                "ok",  # 只保留真正有视频的频道
                 float(cfg["min_speed_kbps"]),
                 int(cfg["min_success_count"]),
                 float(cfg["timeout_seconds"]) * 1000,
