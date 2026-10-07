@@ -52,6 +52,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     ),
+    "skip_failed_sources": False,  # 是否跳过失败的源，只测成功的 + 新源
 }
 
 # 页面上给出的周期候选（分钟），“自定义”允许任意 1..1440
@@ -174,6 +175,13 @@ def validate(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
 
     ua = str(raw.get("user_agent", "") or "").strip()
     cfg["user_agent"] = ua or DEFAULT_CONFIG["user_agent"]
+
+    # 跳过失败源：布尔值，默认 False
+    skip_failed = raw.get("skip_failed_sources")
+    if skip_failed is None:
+        cfg["skip_failed_sources"] = DEFAULT_CONFIG["skip_failed_sources"]
+    else:
+        cfg["skip_failed_sources"] = bool(skip_failed)
 
     return cfg, errors
 

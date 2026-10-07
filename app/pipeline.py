@@ -501,14 +501,17 @@ class Pipeline:
     async def _test_all(self, cfg: dict[str, Any]) -> None:
         assert self.group is not None
         self.state["stage"] = "测速中"
-        channels = await asyncio.to_thread(self.db.pending_test_channels)
+        channels = await asyncio.to_thread(
+            self.db.pending_test_channels, cfg.get("skip_failed_sources", False)
+        )
         total = len(channels)
         if total == 0:
             log.warning("[WARN] 数据库里没有待测频道，跳过测速")
             self.state.update(total=0, done=0)
             return
         limit = concurrency_limited(cfg)
-        log.info("[INFO] 开始测速，并发数=%d，超时=%ds，最低速度=%dKB/s", limit, cfg["timeout_seconds"], cfg["min_speed_kbps"])
+        skip_msg = "（已跳过失败源）" if cfg.get("skip_failed_sources") else ""
+        log.info("[INFO] 开始测速%s，并发数=%d，超时=%ds，最低速度=%dKB/s", skip_msg, limit, cfg["timeout_seconds"], cfg["min_speed_kbps"])
         run_id = await asyncio.to_thread(self.db.create_run, self.state["kind"])
         self.state["run_id"] = run_id
         await asyncio.to_thread(self.db.update_run_progress, run_id, total=total)

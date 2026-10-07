@@ -589,9 +589,25 @@ class Database:
                 f"UPDATE channels SET {cols} WHERE id=?", (*sets.values(), channel_id)
             )
 
-    def pending_test_channels(self) -> list[dict[str, Any]]:
-        """待测顺序：新频道/从未成功 → 上次失败 → 上次成功，保证半途取消也能刷新高风险源。"""
+    def pending_test_channels(self, skip_failed_sources: bool = False) -> list[dict[str, Any]]:
+        """待测顺序：新频道/从未成功 → 上次失败 → 上次成功，保证半途取消也能刷新高风险源。
+
+        如果 skip_failed_sources=True，则跳过那些所有频道都失败的订阅源（ok=0），
+        只测试来自成功源的频道 + 新增的频道。
+        """
         rows = self.active_channels()
+
+        # 如果需要跳过失败源，先找出哪些源是成功的
+        if skip_failed_sources:
+            source_stats = self.source_summary()
+            successful_sources = {
+                row["source_url"] for row in source_stats if int(row.get("ok", 0)) > 0
+            }
+            # 过滤：只保留来自成功源的频道，或者没有 source_url 的频道（兼容旧数据）
+            rows = [
+                row for row in rows
+                if not row.get("source_url") or row["source_url"] in successful_sources
+            ]
 
         def rank(row: dict[str, Any]) -> tuple[int, int]:
             if row["status"] in OK_STATUSES:

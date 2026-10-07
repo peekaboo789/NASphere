@@ -152,6 +152,12 @@
       preferSel.appendChild(o);
     });
     preferSel.value = cfg.ip_prefer || "auto";
+
+    // 跳过失败源复选框
+    var skipCheckbox = $("skip_failed_sources");
+    if (skipCheckbox) {
+      skipCheckbox.checked = !!cfg.skip_failed_sources;
+    }
   }
 
   function syncIntervalVisibility() {
@@ -182,6 +188,7 @@
       min_speed_kbps: Number($("min_speed_kbps").value),
       min_success_count: Number($("min_success_count").value),
       ip_prefer: $("ip_prefer").value,
+      skip_failed_sources: !!$("skip_failed_sources").checked,
     };
   }
 
