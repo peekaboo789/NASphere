@@ -250,9 +250,16 @@ def get_config() -> dict[str, Any]:
 def concurrency_limited(cfg: dict[str, Any]) -> int:
     """并发数最终还要受 CPU 上限约束，避免 NAS 上开太多 ffmpeg 进程。
 
-    CPU 预算 = CPU 核心数 * 12（每个核心同时跑 12 个 ffprobe/ffmpeg 子进程）。
-    现代 CPU 的 ffprobe 大部分时间在等 I/O，所以可以开高一点；如果 NAS 负载过高，
-    用户可以在配置里降低 concurrency 值。
+    CPU 预算 = CPU 核心数 * 20（每个核心同时跑 20 个 ffprobe/ffmpeg 子进程）。
+    ffprobe 是典型的 I/O 密集型任务：大部分时间在等网络下载、DNS 解析、TCP 握手，
+    CPU 使用集中在解析头部和流信息（几毫秒）。现代多核 CPU 完全可以同时跑很多子进程。
+
+    例如：
+    - 4 核机器：最多 80 并发
+    - 8 核机器：最多 160 并发
+    - 16 核机器：最多 200 并发（达到全局上限）
+
+    如果 NAS 负载过高，用户可以在配置里降低 concurrency 值。
     """
-    cpu_budget = max(8, (os.cpu_count() or 4) * 12)
+    cpu_budget = max(16, (os.cpu_count() or 4) * 20)
     return int(_clamp(cfg["concurrency"], 1, min(200, cpu_budget)))
