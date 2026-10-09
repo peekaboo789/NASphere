@@ -489,19 +489,18 @@ async def test_one_family(
             req.add_header("User-Agent", cfg["user_agent"])
             req.set_proxy(proxy_url.replace("http://", ""), "http")
             try:
-                resp = urllib.request.urlopen(req, timeout=float(cfg["timeout_seconds"]))
+                # HLS 播放列表通常很小（几 KB），给一个较短的超时（最多 5 秒）
+                hls_timeout = min(5.0, float(cfg["timeout_seconds"]))
+                resp = urllib.request.urlopen(req, timeout=hls_timeout)
                 playlist_text = resp.read(65536).decode("utf-8", errors="replace")
                 segments = _parse_hls_segments(playlist_text, url)
                 if segments:  # 只要有分片就采样（即使只有 1 个也比没有好）
-                    _log.info("[HLS检测] 解析到 %d 个分片，准备采样探测", len(segments))
                     hls_segment_info = await _probe_hls_segments(
                         cfg, proxy_url, segments, group, max_samples=3
                     )
-                else:
-                    _log.warning("[HLS检测] 播放列表解析后没有发现媒体段分片: %s", url)
-            except Exception as exc:
-                _log.warning("[HLS检测] 播放列表获取失败，回退到单URL检测: %s", exc)
-                # 播放列表拿不到就跳过，回退到单 URL 检测
+            except Exception:
+                # HLS 检测失败是正常现象（源站慢、网络抖动等），静默回退到单 URL 检测
+                pass  # 播放列表拿不到就跳过，回退到单 URL 检测
 
         rc, stdout, stderr, elapsed, timed_out = await _run_process(
             _probe_args(cfg, proxy_url, url), wall, group
