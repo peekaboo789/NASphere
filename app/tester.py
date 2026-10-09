@@ -18,11 +18,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
 import re
 import time
 from typing import Any, Awaitable, Callable, Iterable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 
 from . import config, dnsinfo
 from .netproxy import ForcedProxy, ProxyError
@@ -279,84 +278,6 @@ def _hls_validity(url: str, proxy: ForcedProxy, format_name: str) -> bool | None
     return "mpegurl" in ctype
 
 
-def _parse_hls_segments(playlist_text: str, base_url: str) -> list[str]:
-    """从 M3U8 播放列表文本里提取分片 URL（只取 .ts/.m4s 媒体段）。"""
-    segments: list[str] = []
-    for line in playlist_text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        # 跳过嵌套播放列表（以 .m3u8 结尾的是子列表，不是媒体段）
-        if line.lower().endswith(".m3u8"):
-            continue
-        if any(line.lower().endswith(ext) for ext in (".ts", ".m4s", ".mp4")):
-            segments.append(urljoin(base_url, line))
-    return segments
-
-
-async def _probe_hls_segments(
-    cfg: dict[str, Any],
-    proxy_url: str,
-    segment_urls: list[str],
-    group: ProcessGroup,
-    max_samples: int = 3,
-) -> dict[str, Any]:
-    """对 HLS 分片做采样 ffprobe，返回合并后的流信息。
-
-    只要有一个分片有视频流就算「有视频」，避免第一个分片恰好无视频的误判。
-    """
-    from .logging_setup import get_logger
-    _log = get_logger()
-
-    merged_info: dict[str, Any] = {
-        "has_video": False,
-        "has_audio": False,
-        "v_codec": "",
-        "a_codec": "",
-        "v_resolution": "",
-        "stream_count": 0,
-    }
-    # 随机采样：如果分片数 <= max_samples 就全部探测，否则随机取 max_samples 个
-    if len(segment_urls) <= max_samples:
-        samples = list(segment_urls)
-    else:
-        samples = random.sample(segment_urls, max_samples)
-    _log.info("[HLS采样] 从 %d 个分片中采样 %d 个进行探测", len(segment_urls), len(samples))
-    for seg_url in samples:
-        timeout_us = int(cfg["timeout_seconds"] * 1_000_000)
-        probe_cmd = [
-            config.FFPROBE_PATH,
-            "-hide_banner",
-            "-loglevel", "error",
-            "-print_format", "json",
-            "-show_streams",
-            "-user_agent", cfg["user_agent"],
-            "-http_proxy", proxy_url,
-            "-rw_timeout", str(timeout_us),
-            "-analyzeduration", str(config.ANALYZE_DURATION_US),
-            "-probesize", str(config.PROBE_SIZE_BYTES),
-            "-i", seg_url,
-        ]
-        rc, stdout, stderr, elapsed, timed_out = await _run_process(probe_cmd, float(cfg["timeout_seconds"]) + 1.0, group)
-        if group.cancelled:
-            break
-        streams, fmt = _streams_from_probe(stdout)
-        info = _describe_streams(streams)
-        # 合并：只要有一个分片有视频/音频就算有
-        if info["has_video"]:
-            merged_info["has_video"] = True
-            if not merged_info["v_codec"]:
-                merged_info["v_codec"] = info["v_codec"]
-            if not merged_info["v_resolution"]:
-                merged_info["v_resolution"] = info["v_resolution"]
-        if info["has_audio"]:
-            merged_info["has_audio"] = True
-            if not merged_info["a_codec"]:
-                merged_info["a_codec"] = info["a_codec"]
-        merged_info["stream_count"] += info["stream_count"]
-    return merged_info
-
-
 def _probe_args(cfg: dict[str, Any], proxy_url: str, url: str) -> list[str]:
     timeout_us = int(cfg["timeout_seconds"] * 1_000_000)
     return [
@@ -476,32 +397,6 @@ async def test_one_family(
         proxy_url = proxy.proxy_url
         started = time.monotonic()
 
-        # —— HLS 播放列表级检测：先解析播放列表，采样分片 ffprobe ——
-        is_hls = (url.lower().endswith(".m3u8") or
-                  "mpegurl" in (proxy.content_type or "").lower())
-        hls_segment_info: dict[str, Any] | None = None
-        if is_hls:
-            # 用 urllib 通过代理获取完整播放列表（代理只负责协议族强制，不拦截这个 GET）
-            import urllib.request
-            from .logging_setup import get_logger
-            _log = get_logger()
-            req = urllib.request.Request(url)
-            req.add_header("User-Agent", cfg["user_agent"])
-            req.set_proxy(proxy_url.replace("http://", ""), "http")
-            try:
-                # HLS 播放列表通常很小（几 KB），给一个较短的超时（最多 5 秒）
-                hls_timeout = min(5.0, float(cfg["timeout_seconds"]))
-                resp = urllib.request.urlopen(req, timeout=hls_timeout)
-                playlist_text = resp.read(65536).decode("utf-8", errors="replace")
-                segments = _parse_hls_segments(playlist_text, url)
-                if segments:  # 只要有分片就采样（即使只有 1 个也比没有好）
-                    hls_segment_info = await _probe_hls_segments(
-                        cfg, proxy_url, segments, group, max_samples=3
-                    )
-            except Exception:
-                # HLS 检测失败是正常现象（源站慢、网络抖动等），静默回退到单 URL 检测
-                pass  # 播放列表拿不到就跳过，回退到单 URL 检测
-
         rc, stdout, stderr, elapsed, timed_out = await _run_process(
             _probe_args(cfg, proxy_url, url), wall, group
         )
@@ -511,13 +406,6 @@ async def test_one_family(
             return attempt
         streams, fmt = _streams_from_probe(stdout)
         info = _describe_streams(streams)
-
-        # —— HLS 分片采样结果合并：只要有一个分片有视频就算「有视频」——
-        if hls_segment_info and not info["has_video"] and hls_segment_info["has_video"]:
-            info["has_video"] = True
-            info["v_codec"] = hls_segment_info["v_codec"] or info["v_codec"]
-            info["v_resolution"] = hls_segment_info["v_resolution"] or info["v_resolution"]
-            info["stream_count"] += hls_segment_info["stream_count"]
 
         attempt.update(info)
         attempt["format_name"] = str(fmt.get("format_name") or "")
