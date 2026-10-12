@@ -206,6 +206,8 @@ const Api = {
   },
   // 让服务端按写死的顺序替这张卡抓一次图标（页面在 https 下够不着内网 http 图标时靠它）
   fetchIcon: (url, urlLan) => Api.call('/api/icon/fetch', { method: 'POST', body: { url, urlLan } }),
+  // 清空「抓过的图标」留档：只影响以后再抓，配置里在用的图标一张不动
+  clearIconCache: () => Api.call('/api/icon/cache/clear', { method: 'POST', body: {} }),
 };
 
 const Store = {

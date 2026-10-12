@@ -403,6 +403,62 @@ const Res = {
   },
 };
 
+/* ---------- 内置的常用大牌站点目录（设置里「常用站点」那一栏） ----------
+   这一份只长在浏览器里，用于展示和「点一下才落盘」：主页上到底有没有这个站，
+   只看 config.json 里那条链接在不在（siteAdded 拿网址比），配置里没有的就当没加。
+   出厂首启自带的是服务端 SEED_SITES 那八个，它们也在这份目录里，所以一进去就标着「已在页面上」。
+   类目名就是落盘时建的分组名（同名分组已存在就直接往里加，不建第二个）；网址一律各家官方域名。
+   加站点要两边各写一行，验证脚本会把两处网址集合对一遍，漏了就算红。 */
+const SITE_CATEGORIES = ['视频', '音乐', '社区资讯', '购物生活', '人工智能', '工具云盘'];
+const SITE_CATALOG = [
+  { cat: '视频', name: '哔哩哔哩', url: 'https://www.bilibili.com/' },
+  { cat: '视频', name: '腾讯视频', url: 'https://v.qq.com/' },
+  { cat: '视频', name: '爱奇艺', url: 'https://www.iqiyi.com/' },
+  { cat: '视频', name: '优酷', url: 'https://www.youku.com/' },
+  { cat: '视频', name: '抖音', url: 'https://www.douyin.com/' },
+  { cat: '视频', name: 'YouTube', url: 'https://www.youtube.com/' },
+  { cat: '视频', name: 'Netflix', url: 'https://www.netflix.com/' },
+
+  { cat: '音乐', name: '网易云音乐', url: 'https://music.163.com/' },
+  { cat: '音乐', name: 'QQ音乐', url: 'https://y.qq.com/' },
+  { cat: '音乐', name: 'Spotify', url: 'https://open.spotify.com/' },
+  { cat: '音乐', name: 'Apple Music', url: 'https://music.apple.com/' },
+
+  { cat: '社区资讯', name: '知乎', url: 'https://www.zhihu.com/' },
+  { cat: '社区资讯', name: '微博', url: 'https://weibo.com/' },
+  { cat: '社区资讯', name: '小红书', url: 'https://www.xiaohongshu.com/' },
+  { cat: '社区资讯', name: '豆瓣', url: 'https://www.douban.com/' },
+  { cat: '社区资讯', name: '百度贴吧', url: 'https://tieba.baidu.com/' },
+  { cat: '社区资讯', name: '什么值得买', url: 'https://www.smzdm.com/' },
+  { cat: '社区资讯', name: 'Reddit', url: 'https://www.reddit.com/' },
+  { cat: '社区资讯', name: '维基百科', url: 'https://zh.wikipedia.org/' },
+
+  { cat: '购物生活', name: '淘宝', url: 'https://www.taobao.com/' },
+  { cat: '购物生活', name: '京东', url: 'https://www.jd.com/' },
+  { cat: '购物生活', name: '拼多多', url: 'https://www.pinduoduo.com/' },
+  { cat: '购物生活', name: '天猫', url: 'https://www.tmall.com/' },
+  { cat: '购物生活', name: 'Amazon', url: 'https://www.amazon.com/' },
+  { cat: '购物生活', name: '铁路12306', url: 'https://www.12306.cn/' },
+
+  { cat: '人工智能', name: 'DeepSeek', url: 'https://chat.deepseek.com/' },
+  { cat: '人工智能', name: '豆包', url: 'https://www.doubao.com/' },
+  { cat: '人工智能', name: 'Kimi', url: 'https://www.kimi.com/' },
+  { cat: '人工智能', name: '通义千问', url: 'https://chat.qwen.ai/' },
+  { cat: '人工智能', name: 'ChatGPT', url: 'https://chatgpt.com/' },
+  { cat: '人工智能', name: 'Gemini', url: 'https://gemini.google.com/' },
+  { cat: '人工智能', name: 'Claude', url: 'https://claude.ai/' },
+  { cat: '人工智能', name: 'Perplexity', url: 'https://www.perplexity.ai/' },
+
+  { cat: '工具云盘', name: 'GitHub', url: 'https://github.com/' },
+  { cat: '工具云盘', name: 'Gitee', url: 'https://gitee.com/' },
+  { cat: '工具云盘', name: '百度网盘', url: 'https://pan.baidu.com/' },
+  { cat: '工具云盘', name: '阿里云盘', url: 'https://www.alipan.com/' },
+  { cat: '工具云盘', name: 'Google Drive', url: 'https://drive.google.com/' },
+  { cat: '工具云盘', name: 'Cloudflare', url: 'https://www.cloudflare.com/' },
+  { cat: '工具云盘', name: 'Speedtest', url: 'https://www.speedtest.net/' },
+  { cat: '工具云盘', name: 'Google', url: 'https://www.google.com/' },
+];
+
 const App = {
   bound: false,
   bingToken: 0,
@@ -1659,6 +1715,45 @@ const App = {
     return box;
   },
 
+  /* ---------- 一条链接刚进主页时抓一次图标，抓到了就固定 ----------
+     这个动作只在「加入主页」那一下发生：新建应用保存、从「常用站点」点格加进来。
+     之后这张卡片每次显示都只看配置里写死的那一份，页面永远不再自动抓取。
+     固定 = 把链接改成 icon=/media/… + iconKind=image，那张图存在 NAS 上，
+     于是各设备、内网外网、以后站点挂了或换了图标，看到的都还是同一张。
+     抓不到就一声不吭：卡片维持级联自己试出来的效果（站方 ico / 模板 / 首字母），下次进页面也不再试。
+     要重来只有两条路：「编辑应用」里手动点「按顺序抓取图标并存到 NAS」，或改成自己选的图标。 */
+  pinIconOnAdd(link) {
+    // 认档不认值：从「Emoji」切到「站点图标」时草稿里那个默认 🔗 还留着（存盘时服务端会清掉），
+    // 拿它当「手动选过了」就把每一条新建的卡都挡在门外——所以这里只看 iconKind。
+    if (!link || !link.id || !link.url || link.iconKind !== 'auto') return;
+    Api.fetchIcon(link.url, link.urlLan)
+      .then((r) => {
+        const fixed = r && r.url;
+        if (!fixed) return;
+        let hit = false;
+        Store.mutate((c) => {
+          for (const l of [...(c.groups || []).flatMap((g) => g.links || []), ...(c.docker ? c.docker.items || [] : [])]) {
+            if (l.id !== link.id) continue;
+            // 只在这一条还是 auto 时写：万一这期间用户在弹层里手动选了图标，手动那份说话。
+            // 这里同样只认档不认值——内存里这条还挂着草稿那个默认 🔗（服务端存盘才清），
+            // 加上「icon 得是空」这道门，新建的卡就一张都固定不上。
+            if (l.iconKind === 'auto') {
+              l.icon = fixed;
+              l.iconKind = 'image';
+              hit = true;
+            }
+            return;
+          }
+        });
+        if (!hit) return;
+        this.renderGroups();
+        this.renderDockerTiles();
+        this.renderAppList();
+        this.renderDockerPane();
+      })
+      .catch(() => {});
+  },
+
   // 分组图标：分组没有网址可猜，所以只有 Emoji / 图片 / 首字母三档
   groupIconNode(g, cls) {
     return this.iconNode(
@@ -2308,6 +2403,8 @@ const App = {
       this.renderDockerTiles();
       this.renderAppList();
       this.renderDockerPane();
+      // 只有「刚加进主页」的这条会去抓图标；编辑已有的卡片不碰，谁手动选过就永远是他那一份
+      if (d.isNew) this.pinIconOnAdd({ id: d.id, url: d.url, urlLan: d.urlLan, iconKind: d.iconKind });
     });
 
     for (const b of $$('#iconKindSeg button')) {
@@ -2920,6 +3017,7 @@ const App = {
     // 应用与容器一览只在打开那一栏时重建：主页有上百个应用，别的栏里没必要跟着重排
     if (tab === 'apps') this.renderAppList();
     if (tab === 'docker') this.renderDockerPane();
+    if (tab === 'sites') this.paintSiteCatalog();
   },
 
   /* ---------- 编辑应用：全站网址应用一览，新建 / 改归属 / 删除都从这里进同一个表单 ---------- */
@@ -3233,6 +3331,100 @@ const App = {
       box.append(mk('宽', 'w', spec.min[0], spec.max[0]), mk('高', 'h', spec.min[1], spec.max[1]));
       li.append(strong, grow, box);
       ul.appendChild(li);
+    }
+  },
+
+  /* ---------- 常用站点目录：点一格就往那一类的分组里加一条，同名分组没有就顺手建 ---------- */
+
+  // 末尾斜杠不算差别：手打的 https://github.com 和目录里那条 https://github.com/ 是同一个站
+  siteKey(url) {
+    return String(url || '').trim().replace(/\/+$/, '');
+  },
+
+  // 只看配置里有没有：这份目录自己永远不落盘，页面上有才算「已加」
+  siteAdded(url) {
+    const k = this.siteKey(url);
+    if (!k) return false;
+    return (Store.cfg.groups || []).some((g) => (g.links || []).some((l) => this.siteKey(l.url) === k));
+  },
+
+  addSite(cat, url) {
+    const s = SITE_CATALOG.find((x) => x.cat === cat && this.siteKey(x.url) === this.siteKey(url));
+    if (!s || this.siteAdded(s.url)) return;
+    const link = { id: uid('l'), title: s.name, url: s.url, icon: '', iconKind: 'auto', desc: '' };
+    Store.mutate((c) => {
+      const g = c.groups.find((x) => x.name === s.cat);
+      if (g) (g.links || (g.links = [])).push(link);
+      else c.groups.push({ id: uid('g'), name: s.cat, collapsed: false, links: [link] });
+    });
+    this.renderGroups();
+    this.paintSiteCatalog();
+    this.toast(`已把 ${s.name} 加到「${s.cat}」`);
+    // 这一格是「加入主页」，所以抓这一次：抓到就固定成 NAS 上那张，以后不再动
+    this.pinIconOnAdd(link);
+  },
+
+  addSiteCat(cat) {
+    const missing = SITE_CATALOG.filter((s) => s.cat === cat && !this.siteAdded(s.url));
+    if (!missing.length) return this.toast(`「${cat}」这一类都已经在页面上了`, 2200);
+    const links = missing.map((s) => ({ id: uid('l'), title: s.name, url: s.url, icon: '', iconKind: 'auto', desc: '' }));
+    Store.mutate((c) => {
+      let g = c.groups.find((x) => x.name === cat);
+      if (!g) {
+        g = { id: uid('g'), name: cat, collapsed: false, links: [] };
+        c.groups.push(g);
+      }
+      if (!g.links) g.links = [];
+      for (const l of links) g.links.push(l);
+    });
+    this.renderGroups();
+    this.paintSiteCatalog();
+    this.toast(`已把「${cat}」这一类加进主页`);
+    for (const l of links) this.pinIconOnAdd(l);
+  },
+
+  // 只在切到这一栏时铺：41 格不必跟着别的栏重排
+  paintSiteCatalog() {
+    const host = $('#siteCatalog');
+    if (!host) return;
+    host.innerHTML = '';
+    for (const cat of SITE_CATEGORIES) {
+      const list = SITE_CATALOG.filter((s) => s.cat === cat);
+      const wrap = document.createElement('div');
+      wrap.className = 'site-cat';
+
+      const head = document.createElement('div');
+      head.className = 'site-head';
+      const h = document.createElement('h3');
+      h.className = 'sub';
+      h.textContent = cat;
+      const all = document.createElement('button');
+      all.type = 'button';
+      all.className = 'btn ghost';
+      all.disabled = list.every((s) => this.siteAdded(s.url));
+      all.textContent = all.disabled ? '这一类已加齐' : '这一类全加';
+      all.addEventListener('click', () => this.addSiteCat(cat));
+      head.append(h, all);
+
+      const grid = document.createElement('div');
+      grid.className = 'site-list';
+      for (const s of list) {
+        const added = this.siteAdded(s.url);
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'site-chip' + (added ? ' added' : '');
+        // 加过的按下去没反应，也不再重复加：要改它去「编辑应用」那栏
+        b.disabled = added;
+        b.title = added ? `${s.url}｜已经在主页上，改名称图标去「编辑应用」那栏` : s.url;
+        b.append(
+          Object.assign(document.createElement('span'), { className: 'site-name', textContent: s.name }),
+          Object.assign(document.createElement('span'), { className: 'site-plus', textContent: added ? '✓' : '＋' })
+        );
+        b.addEventListener('click', () => this.addSite(cat, s.url));
+        grid.appendChild(b);
+      }
+      wrap.append(head, grid);
+      host.appendChild(wrap);
     }
   },
 
@@ -3662,6 +3854,16 @@ const App = {
         this.toast('已清空为初始配置');
       } catch (err) {
         this.toast('重置失败：' + err.message, 4000, true);
+      }
+    });
+
+    $('#iconCacheClear').addEventListener('click', async () => {
+      if (!confirm('清掉 NAS 上「抓过的图标」留档？\n（主页正在用的图标一张都不动，只是以后再抓会重新出网，六小时暂缓也跟着作废）')) return;
+      try {
+        const r = await Api.clearIconCache();
+        this.toast(`已清掉 ${r && r.cleared ? r.cleared : 0} 条图标留档`, 3200);
+      } catch (err) {
+        this.toast('清留档失败：' + err.message, 4000, true);
       }
     });
 

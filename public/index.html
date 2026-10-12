@@ -128,6 +128,7 @@
       <button class="tab active" type="button" data-tab="look">外观壁纸</button>
       <button class="tab" type="button" data-tab="board">主页排列</button>
       <button class="tab" type="button" data-tab="apps">编辑应用</button>
+      <button class="tab" type="button" data-tab="sites">常用站点</button>
       <button class="tab" type="button" data-tab="docker">应用矩阵</button>
       <button class="tab" type="button" data-tab="search">搜索引擎</button>
       <button class="tab" type="button" data-tab="widget">小组件</button>
@@ -214,6 +215,11 @@
       <ul class="app-list" id="appList"></ul>
     </div>
 
+    <div class="tab-body" data-body="sites" hidden>
+      <p class="muted">这一栏是一份内置的常用大牌站点目录：点一格就往主页上对应那一类的分组里加一条链接，<b>同名分组没有就顺手建一个</b>，已经有就把这条加进去。加过的会压暗、右边打个勾，再点也不会重复加；想改名称图标去「编辑应用」那栏。出厂首启自带的是「常用」那一组八个站（哔哩哔哩、知乎、微博、淘宝、京东、百度网盘、GitHub、YouTube），它们在这份目录里一进去就是加过的状态。<b>这里列的网址全是各家的官方域名，只有填了外网网址那一条</b>，所以 NAS 得出得去外网才打得开；图标用的是站点自己的 favicon，抓不到时退回首字母，图标抓不抓得到都不影响这一格能不能点。</p>
+      <div id="siteCatalog"></div>
+    </div>
+
     <div class="tab-body" data-body="docker" hidden>
       <p class="muted">这一栏管主页上的两类组件，都不再住在窗口里、每张各带自己的坐标<b>直接摆在主页上</b>：容器状态卡读 NAS 上的 Docker，读数卡读内存、CPU、网络、显卡和各卷容量。先整列摊开<b>所有容器</b>和<b>NAS 资源</b>，点一个就往页面上加一张（已经挂过的标着「已在页面上」，容器那张点它直接编辑；<b>自定义读数</b>能加好几张，每张各勾自己的行，勾哪几行画哪几行）。<b>挪位置在主页上长按那张组件约半秒再拖</b>，摆到任意坐标、互相叠放都行，刚拖过的盖在上面；每行里的两个滑块调这一张自己的长宽。容器数据每 3 秒刷一次、资源数据每 5 秒刷一次（切到后台的标签页不刷），<b>启动 / 停止 / 重启在容器组件上右键</b>。<b>能查看和启停的容器只有这一栏点过名的</b>，删除、重建、进容器执行命令都没有开放。<b>读数只取计数器一样的数字</b>：内存、CPU、网络、显卡只读 /proc 与 /sys 里那几项统计，卷只对整个文件系统调一次 statfs——接口里不会列出一个文件名，页面上那一行挂载点是安装脚本交进来的宿主机路径，只有登录后的你看得见。</p>
       <h3 class="sub">容器一览</h3>
@@ -268,6 +274,7 @@
         <label class="btn" for="importFile">导入配置 JSON</label>
         <input type="file" id="importFile" accept="application/json,.json" hidden>
         <button class="btn" type="button" id="resetBtn">清空为初始配置</button>
+        <button class="btn" type="button" id="iconCacheClear">清空图标缓存</button>
       </div>
       <h3 class="sub">分组概览</h3>
       <button class="btn primary" type="button" id="groupNewBtn">＋ 新建分组</button>

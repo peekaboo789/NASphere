@@ -969,6 +969,36 @@ select.field { max-width: 220px; }
 .app-row .grow { flex: 1; min-width: 0; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-row .btn-row { flex: none; gap: 2px; }
 
+/* 常用站点目录：类目头（名称 + 这一类的「全加」）加一排格子。
+   格子比一览行窄得多，用 min() 夹住下限，宽屏自然铺五六列、窄屏自己回列，不需要第二套断点 */
+.site-cat { display: grid; gap: 2px; }
+.site-head { display: flex; align-items: center; gap: 10px; }
+.site-head .sub { flex: 1 1 0; min-width: 0; margin: 18px 0 0; }
+.site-head .btn.ghost { flex: none; }
+.site-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 132px), 1fr)); gap: 8px; margin: 8px 0 2px; }
+.site-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--tile);
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.site-chip:hover { background: var(--tile-hover); border-color: var(--accent-line); }
+.site-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.site-plus { margin-left: auto; flex: none; color: var(--accent); font-size: 12px; }
+/* 加过的按不动，也不会再补一条：整格压暗、右边那个加号换成淡勾，跟一览里「已在页面上」同一说法 */
+.site-chip:disabled { opacity: 0.45; cursor: default; }
+.site-chip:disabled:hover { background: var(--tile); border-color: var(--panel-border); }
+.site-chip:disabled .site-plus { color: var(--text-faint); }
+
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); margin-top: 10px; }
 .pw-form { display: grid; gap: 12px; }
 
@@ -1608,6 +1638,47 @@ body.board-drag .mod { cursor: grabbing; }
   .dk-layer { display: flex; flex-direction: column; align-items: flex-start; gap: var(--gap-panel); height: auto !important; }
   .dk-tile { position: static; width: min(var(--dk-tile-w, 250px), 100%); }
 
+  /* 「应用矩阵」这一栏是唯一会横向撑破设置弹层的一栏：一览行和组件行里的每一格都带着自动最小宽度
+     （flex/grid 的 min-width:auto），单是「容器 xunlei｜运行中 · CPU …」那一串就把整条栅格轨道顶到
+     487px——比 390 的屏还宽 150px，手指得往右推着看，行里每一格又同时被挤到只剩几个字。
+     先把这几格的自动最小宽度放开（撑破弹层立刻消失），再把两种行改成竖着排：
+     一览行第一行给名字 + 状态 + 那格标、第二行给镜像名，组件行读数整行折行，两条滑块一行一条拉满。 */
+  .tab-body[data-body="docker"] > *,
+  .tab-body[data-body="docker"] .app-list > *,
+  .tab-body[data-body="docker"] .docker-list > * { min-width: 0; }
+  /* 一览不再自带 420px 的内滚动：设置弹层本来就在滚，滚轮/手指在两处换向最难受，这里让它跟着页面一路排下去。
+     编辑弹层里「每一行的小名」那一列同理 */
+  .docker-list, .docker-list.compact, .res-names { max-height: none; }
+  .docker-row { flex-wrap: wrap; gap: 7px; padding: 8px 10px; }
+  /* 第一行给名字留足整段：那两格的固定列宽（状态 4em、标 6.5em）是为桌面两列对齐设的，
+     在手机上反而把容器名咬到只剩几个字——这里放开下限，让文字自己占该占的宽，
+     镜像名／读数注记单独占第二行（basis 100% 才会真换行） */
+  .docker-name { flex: 1 1 0; }
+  .docker-state { min-width: 0; }
+  .docker-mark { min-width: 0; margin-left: auto; }
+  .docker-image { order: 5; flex: 1 1 100%; max-width: 100%; margin-left: 0; }
+  /* 组件行里的顺序由 order 定死：名字和两个小按钮一行，读数一整行（让它折行，别把上下行速率截掉），
+     勾选行和滑块各占整行 —— 桌面那套「名字固定列宽 + 读数挤在一行」在这里撑不住 */
+  .dk-row strong { order: 1; flex: 1 1 0; max-width: none; }
+  .dk-row .btn-row { order: 2; margin-left: auto; }
+  .dk-row .grow { order: 3; flex: 1 1 100%; white-space: normal; overflow: visible; }
+  .dk-row .res-pick { order: 4; }
+  .dk-row .size-set { order: 5; }
+  .dk-row .size-set label { flex: 1 1 100%; min-width: 0; gap: 9px; }
+  .dk-row .size-set input[type="range"] { flex: 1 1 auto; width: auto; min-width: 0; }
+  /* 弹层左右各让开 8px：内容宽从 292 回到 308，一览那行的读数就不用再被截 */
+  .modal-card { padding: 18px 16px 20px; }
+
+  /* 「常用站点」那一栏的格子在手机上不照桌面那样铺：132 的下限在 310 的内容宽里出来的是两列半，
+     每一格的名字都被咬断。这里把下限收到 110（正好两列），并把格子内容的自动最小宽度放开、名字允许折行 */
+  .tab-body[data-body="sites"] > *,
+  .site-cat,
+  .site-head,
+  .site-list,
+  .site-chip { min-width: 0; }
+  .site-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 110px), 1fr)); }
+  .site-name { white-space: normal; }
+
   /* 那列分组圆点是浮在内容上的，窄屏给第一个图标让开它的宽度；内核不认 :has 就只是少留一点白 */
   .side-nav { left: calc(4px + env(safe-area-inset-left)); }
   body:has(.side-nav:not([hidden])) .app { padding-left: calc(40px + env(safe-area-inset-left)); }
@@ -1624,8 +1695,10 @@ body.board-drag .mod { cursor: grabbing; }
   html[data-free="on"] .board > .dk-layer { display: flex; }
   html[data-weather="on"][data-free="on"] .board > .topbar { display: flex; }
   html[data-free="on"] .mod { position: static; left: auto; top: auto; z-index: auto; }
-  html[data-free="on"] .mod:not(.dk-tile):not(.search) { width: auto; height: auto; }
-  /* 组件回到摆放区那一套尺寸变量上（画布那套 --w / --h 这一档不作数），搜索框恢复靠 auto 边距居中 */
+  html[data-free="on"] .mod:not(.dk-tile) { width: auto; height: auto; }
+  /* 组件回到摆放区那一套尺寸变量上（画布那套 --w / --h 这一档不作数）。
+     搜索框也一起退回自动宽：它在画布上量到的那 860px 比手机屏还宽出 500px，
+     留着会把整页顶成横向可滚（390 的屏上 documentElement.scrollWidth 是 900），这里靠 auto 边距居中就够了 */
   html[data-free="on"] .dk-tile.mod { width: min(var(--dk-tile-w, 250px), 100%); height: var(--dk-tile-h, 118px); }
   html[data-free="on"] .mod.search { max-width: 860px; margin: 18px auto 0; }
   .mod-grip, .mod-rz, #guideLayer { display: none; }
@@ -1660,6 +1733,14 @@ body.board-drag .mod { cursor: grabbing; }
   .corner-btn { width: 34px; height: 34px; }
   .corner-btn svg { width: 18px; height: 18px; }
   .side-dot { width: 32px; height: 32px; }
+  /* 「应用矩阵」里的三种按着：一览一行、自定义读数的勾选格、两条宽高滑块 */
+  .docker-row { min-height: 46px; }
+  .res-pick-item { padding: 7px 11px; font-size: 13px; }
+  .res-pick-item input { width: 17px; height: 17px; }
+  .dk-row .size-set input[type="range"] { height: 26px; }
+  /* 站点目录的格子与那一类的「全加」也一起给到指头尺寸 */
+  .site-chip { min-height: 40px; }
+  .site-head .btn.ghost { height: 34px; }
   .tile-x { width: 24px; height: 24px; font-size: 13px; }
   .tile-move button { width: 20px; height: 20px; font-size: 11px; }
   [data-edit="on"] [data-size="small"] .tile .tile-x { width: 24px; height: 24px; font-size: 12px; }

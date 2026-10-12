@@ -455,6 +455,32 @@ const normTitle = (v) => {
   return LEGACY_TITLES.includes(t) ? '' : t;
 };
 
+/* ---------- 出厂内置的那一组常用站点 ----------
+   首启只带名气最大的八个：主页一打开不是空白，但也还是一屏谁都能看懂的公共网址，
+   没有个人域名、没有私有站点、没有绑容器的卡片。剩下四十来个在设置「常用站点」那一栏里，
+   用户点一下才落盘（见 public/js/app.js 的 SITE_CATALOG，那一份只用于展示与添加，不写进配置）。
+   这一份必须写成 sanitize 走完之后的形状：固定 id、icon 空串也照样写出来、可选的空键不写——
+   「清空为初始配置」走的是 sanitize({})，两条路要逐字节相同，存一次配置不能让它变样。
+   网址一律是各家官方域名，只填外网那一条：内网模式下同一条网址也照样打开。 */
+const SEED_SITES = [
+  { id: 'l_seed_bili', title: '哔哩哔哩', url: 'https://www.bilibili.com/' },
+  { id: 'l_seed_zhihu', title: '知乎', url: 'https://www.zhihu.com/' },
+  { id: 'l_seed_weibo', title: '微博', url: 'https://weibo.com/' },
+  { id: 'l_seed_taobao', title: '淘宝', url: 'https://www.taobao.com/' },
+  { id: 'l_seed_jd', title: '京东', url: 'https://www.jd.com/' },
+  { id: 'l_seed_baidupan', title: '百度网盘', url: 'https://pan.baidu.com/' },
+  { id: 'l_seed_github', title: 'GitHub', url: 'https://github.com/' },
+  { id: 'l_seed_youtube', title: 'YouTube', url: 'https://www.youtube.com/' },
+];
+const seedGroups = () => [
+  {
+    id: 'g_seed',
+    name: '常用',
+    collapsed: false,
+    links: SEED_SITES.map((s) => ({ id: s.id, title: s.title, url: s.url, icon: '', iconKind: 'auto', desc: '' })),
+  },
+];
+
 function defaultConfig() {
   return {
     version: 1,
@@ -483,8 +509,8 @@ function defaultConfig() {
         { id: 'sogou', name: '搜狗', url: 'https://www.sogou.com/web?query={query}' },
       ],
     },
-    // 干净版：首启不带任何分组、链接、便签与待办，主页从空页面开始，用户自己加。
-    groups: [],
+    // 首启带的是上面那一个「常用」分组、八个公共网址；容器组件、便签与待办仍然一条都没有
+    groups: seedGroups(),
     // Docker 组件：一张卡绑一个容器，长宽与摆放坐标各存各的；一条都没有时主页上一个组件都不出现
     docker: {
       items: [],
@@ -522,8 +548,9 @@ function sanitize(raw) {
 
   const groupIds = new Set();
   const linkIds = new Set();
-  // 没写 groups 与显式写 groups: [] 都是空页面（干净版首启就是这样）
-  const rawGroups = Array.isArray(src.groups) ? src.groups : [];
+  // 没写 groups 这一项 = 拿初始那一份（首启和「清空为初始配置」都走这条，两条路要逐字节相同）；
+  // 显式写 groups: [] 是用户把分组删空之后存下来的，那是他的页面，不能给他补回内置那八个站
+  const rawGroups = Array.isArray(src.groups) ? src.groups : base.groups;
   const groups = rawGroups.slice(0, LIM.groups).map((g) => normGroup(g, groupIds, linkIds));
 
   // 早期配置把容器卡片写在分组里：一律摘出来当独立组件，分组网格从此只放网址应用。
@@ -853,6 +880,10 @@ function collectStrings(node, out) {
 function gcUploads(cfg) {
   try {
     const refs = collectStrings(cfg, new Set());
+    // 抓图留档里那张也算「在用」：页面刚抓完、配置还没写回去的这几百毫秒里别把它当垃圾清了
+    for (const rec of Object.values(readIconCache())) {
+      if (rec && typeof rec.file === 'string') refs.add(rec.file);
+    }
     const blob = [...refs].join('\n');
     let removed = 0;
     for (const name of fs.readdirSync(UPLOAD_DIR)) {
@@ -1837,6 +1868,66 @@ const ICON_TIMEOUT = 5000;
 const ICON_MAX_REDIRECTS = 3;
 const ICON_UA = 'Mozilla/5.0 (NASphere icon fetch)';
 
+/* ---------- 抓过的图标在 NAS 上留档（data/icons.json）----------
+   「固定过一次就一直是那一张」：某个图标地址只要成功抓到过，就把这次落在 uploads 里的那张记下来，
+   以后同一个地址不再出网，直接把已经存着的回给页面；同一站的两张卡、换设备、换浏览器都拿到同一张。
+   全都落空也记一笔，六小时内不再对同一个地址重试，免得每次开页面都对死站发一轮请求。
+   记下的那张被 GC 或手工删掉了就算没记过，下一次重新抓。
+   这份只是抓图留档，不是用户数据：跟着 data/ 一起备份，但「清空为初始配置」不动它。 */
+const ICON_CACHE_PATH = path.join(DATA_DIR, 'icons.json');
+const ICON_FAIL_TTL = 6 * 60 * 60 * 1000;
+const ICON_CACHE_MAX = 400;
+let iconCache = null;
+// 同一地址的并发抓取合成一次：首启那八个站、目录里一次加一整类，都只出网一次
+const iconInflight = new Map();
+
+function readIconCache() {
+  if (iconCache) return iconCache;
+  try {
+    const raw = JSON.parse(fs.readFileSync(ICON_CACHE_PATH, 'utf8'));
+    iconCache = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch {
+    iconCache = {};
+  }
+  return iconCache;
+}
+
+function writeIconCache(key, entry) {
+  const c = readIconCache();
+  c[key] = entry;
+  const keys = Object.keys(c);
+  if (keys.length > ICON_CACHE_MAX) {
+    // 超出上限按最久没成功的先丢：留档条目本来就少，不做额外结构
+    keys.sort((a, b) => (Number(c[a] && c[a].at) || 0) - (Number(c[b] && c[b].at) || 0));
+    for (const k of keys.slice(0, keys.length - ICON_CACHE_MAX)) delete c[k];
+  }
+  try {
+    writePrivate(ICON_CACHE_PATH, JSON.stringify(c, null, 2));
+  } catch (e) {
+    console.warn('icons.json 写入失败：' + e.message);
+  }
+}
+
+// 留档里的文件还在不在：不在就报「没记过」，让调用方重新抓
+function iconCachedFile(rec) {
+  if (!rec || typeof rec.file !== 'string') return '';
+  const name = path.basename(rec.file);
+  if (!/^[A-Za-z0-9_.-]{1,80}$/.test(name)) return '';
+  try {
+    return fs.statSync(path.join(UPLOAD_DIR, name)).isFile() ? '/media/' + name : '';
+  } catch {
+    return '';
+  }
+}
+
+function fetchIconShared(target) {
+  const p = iconInflight.get(target);
+  if (p) return p;
+  const run = fetchIconAt(target, ICON_MAX_REDIRECTS).finally(() => iconInflight.delete(target));
+  iconInflight.set(target, run);
+  return run;
+}
+
 /* 只按文件头认格式，不信 Content-Type：favicon.ico 被报成别 MIME 是常态，
    反过来把登录页 HTML 报成 image/png 的更多（反代、门户、302 到登录页）。 */
 const iconSniffers = [
@@ -1925,16 +2016,34 @@ async function handleIconFetch(req, res) {
   const sources = iconSourceList(link, readConfig().appearance.iconTemplate);
   if (!sources.length) return send(res, 400, { error: '内网 / 外网网址至少填一条 http(s) 地址，才有站点图标可抓' });
   const tried = [];
+  const cache = readIconCache();
   for (const src of sources) {
+    const rec = cache[src.url];
+    // 1) 这个地址以前抓到过：直接把 NAS 上存着的那一张回出去，一次网都不出
+    if (rec && !rec.failAt) {
+      const keep = iconCachedFile(rec);
+      if (keep) {
+        tried.push({ label: src.label, url: src.url, cached: true });
+        return send(res, 200, { url: keep, label: src.label, source: src.url, tried, cached: true });
+      }
+    }
+    // 2) 六小时内刚试过没拿到：这一档跳过，别每次开页面都对着死站发请求
+    if (rec && rec.failAt && Date.now() - Number(rec.failAt) < ICON_FAIL_TTL) {
+      tried.push({ label: src.label, url: src.url, error: (rec.error || '最近刚试过') + '（暂缓重试）' });
+      continue;
+    }
     try {
-      const got = await fetchIconAt(src.url, ICON_MAX_REDIRECTS);
+      const got = await fetchIconShared(src.url);
       const name = crypto.createHash('sha1').update(got.buf).digest('hex').slice(0, 20) + got.ext;
       const file = path.join(UPLOAD_DIR, name);
       // 内容寻址：同一个图标反复抓只占一份文件，写之前看一眼，省一次落盘
       if (!fs.existsSync(file)) fs.writeFileSync(file, got.buf);
+      writeIconCache(src.url, { file: '/media/' + name, label: src.label, at: Date.now() });
       return send(res, 200, { url: '/media/' + name, label: src.label, source: src.url, tried });
     } catch (e) {
-      tried.push({ label: src.label, url: src.url, error: String((e && e.message) || e).slice(0, 120) });
+      const why = String((e && e.message) || e).slice(0, 120);
+      tried.push({ label: src.label, url: src.url, error: why });
+      writeIconCache(src.url, { failAt: Date.now(), error: why });
     }
   }
   // 全都落空时不装作成功：把每一档试到什么、为什么不算，原样带回给页面
@@ -1942,6 +2051,21 @@ async function handleIconFetch(req, res) {
     error: '按顺序试过了，都没拿到图标：' + tried.map((t) => `${t.label}（${t.error}）`).join('、'),
     tried,
   });
+}
+
+/* 清空图标留档：data/icons.json 抹掉，只被留档引用的那几张图跟着被回收。
+   配置里正在用的图标一张都不动——所以清完只是「以后要重新抓」，主页上看到的还是原来那张。 */
+function handleIconCacheClear(req, res) {
+  const before = Object.keys(readIconCache()).length;
+  iconCache = {};
+  try {
+    fs.rmSync(ICON_CACHE_PATH, { force: true });
+  } catch (e) {
+    return send(res, 500, { error: '留档清不掉：' + e.message });
+  }
+  // 留档已经空了，这一句只会删掉「配置不认、原先靠留档保命」的那几张
+  gcUploads(readConfig());
+  send(res, 200, { cleared: before });
 }
 
 const bingCache = { at: 0, url: '' };
@@ -2127,6 +2251,9 @@ const server = http.createServer((req, res) => {
 
   // 按写死的顺序替这张卡片抓一次站点图标，存成上传目录里的固定图标
   if (p === '/api/icon/fetch' && req.method === 'POST') return handleIconFetch(req, res);
+
+  // 「数据」栏那个清空按钮：只清抓图留档，配置里在用的图标一张不动
+  if (p === '/api/icon/cache/clear' && req.method === 'POST') return handleIconCacheClear(req, res);
 
   // 磁贴要的数据：只看配置里挂出来的那几个容器，客户端不能自己点名要别人机器上的容器
   if (p === '/api/docker/state' && req.method === 'GET') {
