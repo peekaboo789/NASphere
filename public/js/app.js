@@ -1698,6 +1698,15 @@ const App = {
       fallback();
       return box;
     }
+    // 上次级联命中的那条记在 localStorage 里：下次开页面直接用，不重跑整条级联
+    const cacheKey = link.id ? 'icon:' + link.id : '';
+    if (cacheKey && link.iconKind !== 'image') {
+      const hit = localStorage.getItem(cacheKey);
+      if (hit && srcs.includes(hit) && srcs[0] !== hit) {
+        srcs.splice(srcs.indexOf(hit), 1);
+        srcs.unshift(hit);
+      }
+    }
     box.className = cls;
     const img = document.createElement('img');
     img.alt = '';
@@ -1706,9 +1715,13 @@ const App = {
     let at = 0;
     img.addEventListener('error', () => {
       // 每一档失败就换下一档：站方没放 ico、页面是 https 而图标是内网 http（混合内容被拦）都算在这一档失败里
+      if (at === 0 && cacheKey) localStorage.removeItem(cacheKey);
       at += 1;
       if (at < srcs.length) img.src = srcs[at];
       else fallback();
+    });
+    img.addEventListener('load', () => {
+      if (cacheKey && link.iconKind !== 'image' && srcs[at]) localStorage.setItem(cacheKey, srcs[at]);
     });
     img.src = srcs[0];
     box.appendChild(img);
