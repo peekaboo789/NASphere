@@ -1720,12 +1720,15 @@ const App = {
      之后这张卡片每次显示都只看配置里写死的那一份，页面永远不再自动抓取。
      固定 = 把链接改成 icon=/media/… + iconKind=image，那张图存在 NAS 上，
      于是各设备、内网外网、以后站点挂了或换了图标，看到的都还是同一张。
-     抓不到就一声不吭：卡片维持级联自己试出来的效果（站方 ico / 模板 / 首字母），下次进页面也不再试。
+     新建应用出厂默认那一档是 Emoji（🔗），所以这里不能只认「站点图标」档：
+     只要他没自己动过图标（manual），不管默认落在哪一档都抓这一次，抓到了就顶掉那个占位。
+     抓不到就一声不吭：卡片维持他默认那一档、或级联自己试出来的效果，下次进页面也不再试。
      要重来只有两条路：「编辑应用」里手动点「按顺序抓取图标并存到 NAS」，或改成自己选的图标。 */
   pinIconOnAdd(link) {
-    // 认档不认值：从「Emoji」切到「站点图标」时草稿里那个默认 🔗 还留着（存盘时服务端会清掉），
-    // 拿它当「手动选过了」就把每一条新建的卡都挡在门外——所以这里只看 iconKind。
-    if (!link || !link.id || !link.url || link.iconKind !== 'auto') return;
+    if (!link || !link.id || !link.url || link.manual) return;
+    // 刚存下那一份的形状先记下来：抓图是异步的，这期间他若自己改了图标，回来比对不上就不写
+    const kind = link.iconKind;
+    const icon = link.icon || '';
     Api.fetchIcon(link.url, link.urlLan)
       .then((r) => {
         const fixed = r && r.url;
@@ -1734,10 +1737,8 @@ const App = {
         Store.mutate((c) => {
           for (const l of [...(c.groups || []).flatMap((g) => g.links || []), ...(c.docker ? c.docker.items || [] : [])]) {
             if (l.id !== link.id) continue;
-            // 只在这一条还是 auto 时写：万一这期间用户在弹层里手动选了图标，手动那份说话。
-            // 这里同样只认档不认值——内存里这条还挂着草稿那个默认 🔗（服务端存盘才清），
-            // 加上「icon 得是空」这道门，新建的卡就一张都固定不上。
-            if (l.iconKind === 'auto') {
+            // 只在这一条还是刚存下那个样子时写：万一这期间用户在弹层里手动选了图标，手动那份说话
+            if (l.iconKind === kind && (l.icon || '') === icon) {
               l.icon = fixed;
               l.iconKind = 'image';
               hit = true;
@@ -2207,6 +2208,8 @@ const App = {
       desc: resMode ? '' : link ? link.desc : '',
       icon: link ? link.icon : kind === 'emoji' && !resMode ? '🔗' : '',
       iconKind: kind,
+      // 只有真交互才置位；打开弹层那次 setLinkIconKind 只是画界面，不算
+      iconManual: false,
       container: dockerMode && link ? link.container || '' : '',
       res: resMode && link ? link.res : '',
       vol: resMode && link ? link.vol || '' : '',
@@ -2330,7 +2333,10 @@ const App = {
       d.desc = $('#lkDesc').value.trim().slice(0, 200);
       // 读数卡的 Emoji 留空 = 用内置那枚描边 SVG，所以不能像应用卡那样补一个默认链接图标
       if (d.iconKind === 'emoji') d.icon = ($('#lkEmoji').value.trim() || (d.resMode ? '' : '🔗')).slice(0, 4);
-      if (d.iconKind === 'image') d.icon = normalizeUrl($('#lkImage').value);
+      else if (d.iconKind === 'image') d.icon = normalizeUrl($('#lkImage').value);
+      // 站点图标 / 首字母两档服务端存盘不留 icon，内存里跟着清一致：
+      // 从 Emoji 切过来时那个默认 🔗 若留着，抓图回来比对形状就对不上
+      else d.icon = '';
       // 行的小名：这一栏列出来的行按输入框重写（清空 = 回到默认名），没列出来的键原样留着——
       // 例如卷暂时读不到时手写的 vols / vol:x，不该因为这一次保存被顺手删掉
       if (d.resMode && !$('#lkResRows').hidden) {
@@ -2404,12 +2410,14 @@ const App = {
       this.renderAppList();
       this.renderDockerPane();
       // 只有「刚加进主页」的这条会去抓图标；编辑已有的卡片不碰，谁手动选过就永远是他那一份
-      if (d.isNew) this.pinIconOnAdd({ id: d.id, url: d.url, urlLan: d.urlLan, iconKind: d.iconKind });
+      if (d.isNew) this.pinIconOnAdd({ id: d.id, url: d.url, urlLan: d.urlLan, icon: d.icon, iconKind: d.iconKind, manual: d.iconManual });
     });
 
     for (const b of $$('#iconKindSeg button')) {
       b.addEventListener('click', () => {
         this.setLinkIconKind(b.dataset.v);
+        // 点「站点图标」＝要站点那张，不算手动；点 Emoji / 图片 / 首字母＝他自己定了这一档
+        this.linkDraft.iconManual = b.dataset.v !== 'auto';
         this.paintLinkPreview();
       });
     }
@@ -2427,6 +2435,7 @@ const App = {
         const r = await Api.fetchIcon(url, urlLan);
         this.linkDraft.icon = r.url;
         this.linkDraft.iconKind = 'image';
+        this.linkDraft.iconManual = true;
         this.setLinkIconKind('image');
         $('#lkImage').value = r.url;
         this.paintLinkPreview();
@@ -2439,7 +2448,11 @@ const App = {
       }
     });
     for (const sel of ['#lkUrl', '#lkUrlLan', '#lkEmoji', '#lkImage', '#lkTitle']) {
-      $(sel).addEventListener('input', () => this.paintLinkPreview());
+      $(sel).addEventListener('input', () => {
+        // 往图标框里打了字才算手动；新建时框里那个 🔗 是程序填的，不触发 input
+        if ((sel === '#lkEmoji' || sel === '#lkImage') && $(sel).value.trim()) this.linkDraft.iconManual = true;
+        this.paintLinkPreview();
+      });
     }
     $('#lkFile').addEventListener('change', async (e) => {
       const file = e.target.files[0];
@@ -2665,6 +2678,7 @@ const App = {
       if (intoDraft) {
         this.linkDraft.icon = url;
         this.linkDraft.iconKind = 'image';
+        this.linkDraft.iconManual = true;
         this.setLinkIconKind('image');
         $('#lkImage').value = url;
         this.paintLinkPreview();
