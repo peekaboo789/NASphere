@@ -3853,22 +3853,67 @@ const App = {
       URL.revokeObjectURL(a.href);
     });
 
-    $('#importFile').addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      e.target.value = '';
-      if (!file) return;
+    // 导入配置：不直接弹系统文件框（它在某些 Windows 上会卡在「正在处理…」），
+    // 先展开一个面板：拖文件进来、粘贴 JSON、或再走系统选择框都行
+    const importBox = $('#importBox');
+    const importText = $('#importText');
+    const closeImport = () => {
+      importBox.hidden = true;
+      importBox.classList.remove('drag');
+      importText.value = '';
+      $('#importHint').textContent = '文件只在本机读，内容随保存一起写进 NAS。';
+    };
+    const doImport = async () => {
+      const raw = importText.value.trim();
+      if (!raw) return this.toast('先拖一个 config.json 进来，或者粘贴内容', 4000, true);
       try {
-        const parsed = JSON.parse(await file.text());
+        const parsed = JSON.parse(raw);
         if (!parsed || !Array.isArray(parsed.groups)) throw new Error('文件结构不对，缺少 groups');
         await Api.saveConfig(parsed);
         await Store.reloadConfig();
         Store.onChange();
         this.renderAll();
         this.syncSettings();
+        closeImport();
         this.toast('配置已导入');
       } catch (err) {
         this.toast('导入失败：' + err.message, 5000, true);
       }
+    };
+    const readImportFile = async (file) => {
+      if (!file) return;
+      try {
+        importText.value = await file.text();
+        $('#importHint').textContent = `已读入 ${file.name}，点「导入」写入 NAS。`;
+      } catch (err) {
+        this.toast('读不了这个文件：' + err.message, 4000, true);
+      }
+    };
+
+    $('#importBtn').addEventListener('click', () => {
+      importBox.hidden = false;
+      importText.focus();
+    });
+    $('#importCancel').addEventListener('click', closeImport);
+    $('#importGo').addEventListener('click', doImport);
+    $('#importPick').addEventListener('click', () => $('#importFile').click());
+    $('#importFile').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      await readImportFile(file);
+    });
+    importBox.addEventListener('dragover', (e) => {
+      if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      importBox.classList.add('drag');
+    });
+    importBox.addEventListener('dragleave', () => importBox.classList.remove('drag'));
+    importBox.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      importBox.classList.remove('drag');
+      await readImportFile(e.dataTransfer.files[0]);
     });
 
     $('#resetBtn').addEventListener('click', async () => {

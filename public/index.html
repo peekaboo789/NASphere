@@ -271,10 +271,20 @@
       <label class="row"><span>编辑模式（卡片可增删、拖拽排序，快捷键 E）</span><input type="checkbox" id="editModeToggle"></label>
       <div class="btn-row">
         <button class="btn" type="button" id="exportBtn">导出配置 JSON</button>
-        <label class="btn" for="importFile">导入配置 JSON</label>
+        <button class="btn" type="button" id="importBtn">导入配置 JSON</button>
         <input type="file" id="importFile" accept="application/json,.json" hidden>
         <button class="btn" type="button" id="resetBtn">清空为初始配置</button>
         <button class="btn" type="button" id="iconCacheClear">清空图标缓存</button>
+      </div>
+      <div class="import-box" id="importBox" hidden>
+        <p class="muted">把导出的 <code>config.json</code> 拖到这里，或者直接把内容粘贴进下面的框——两条路都不经过系统文件框。</p>
+        <textarea class="field import-text" id="importText" spellcheck="false" placeholder='{ "version": 1, "groups": [ … ] }'></textarea>
+        <div class="import-row">
+          <button class="btn" type="button" id="importPick">选择文件…</button>
+          <button class="btn primary" type="button" id="importGo">导入</button>
+          <button class="btn" type="button" id="importCancel">取消</button>
+        </div>
+        <p class="muted" id="importHint">文件只在本机读，内容随保存一起写进 NAS。</p>
       </div>
       <h3 class="sub">分组概览</h3>
       <button class="btn primary" type="button" id="groupNewBtn">＋ 新建分组</button>
