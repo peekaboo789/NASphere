@@ -1866,7 +1866,11 @@ function handleMediaUpload(req, res) {
 const ICON_MAX_BYTES = 2 * 1024 * 1024;
 const ICON_TIMEOUT = 5000;
 const ICON_MAX_REDIRECTS = 3;
-const ICON_UA = 'Mozilla/5.0 (NASphere icon fetch)';
+// 用普通浏览器的 UA：不少 CDN / 门户对陌生 UA 直接 403，浏览器看得见、服务端却抓不到
+const ICON_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+// 读页面 HTML 只为找 <link rel="icon">，别把整站页面拖下来
+const ICON_PAGE_TIMEOUT = 4000;
+const ICON_PAGE_MAX_BYTES = 512 * 1024;
 
 /* ---------- 抓过的图标在 NAS 上留档（data/icons.json）----------
    「固定过一次就一直是那一张」：某个图标地址只要成功抓到过，就把这次落在 uploads 里的那张记下来，
@@ -1926,6 +1930,100 @@ function fetchIconShared(target) {
   const run = fetchIconAt(target, ICON_MAX_REDIRECTS).finally(() => iconInflight.delete(target));
   iconInflight.set(target, run);
   return run;
+}
+
+/* 站点把图标声明在 <link rel="icon" href="/static/xxx.png"> 这种猜不到的路径上时，
+   浏览器自己找得到、我们只看 /favicon.ico 就永远落空。猜的那几档全失败后读一遍页面，
+   把这些地址补进候选——图标是浏览器正常显示过的那一张，才有「固定到 NAS」的机会。 */
+function fetchPageHtml(target, depth = 2) {
+  return new Promise((resolve) => {
+    let u;
+    try {
+      u = new URL(String(target));
+    } catch {
+      return resolve('');
+    }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return resolve('');
+    const lib = u.protocol === 'https:' ? https : http;
+    let done = false;
+    const finish = (v) => {
+      if (!done) {
+        done = true;
+        resolve(v);
+      }
+    };
+    const req = lib.get(
+      u,
+      { headers: { 'User-Agent': ICON_UA, Accept: 'text/html,application/xhtml+xml' }, timeout: ICON_PAGE_TIMEOUT },
+      (up) => {
+        const loc = up.headers && up.headers.location;
+        if (up.statusCode >= 300 && up.statusCode < 400 && loc) {
+          up.resume();
+          if (depth <= 0) return finish('');
+          let next = '';
+          try {
+            next = new URL(loc, u).href;
+          } catch {
+            return finish('');
+          }
+          return fetchPageHtml(next, depth - 1).then(finish);
+        }
+        if (up.statusCode !== 200) {
+          up.resume();
+          return finish('');
+        }
+        const type = String(up.headers['content-type'] || '');
+        if (type && !/html/i.test(type)) {
+          up.resume();
+          return finish('');
+        }
+        const chunks = [];
+        let size = 0;
+        up.on('data', (c) => {
+          size += c.length;
+          if (size > ICON_PAGE_MAX_BYTES) {
+            req.destroy();
+            return finish('');
+          }
+          chunks.push(c);
+        });
+        up.on('end', () => finish(Buffer.concat(chunks).toString('utf8')));
+        up.on('error', () => finish(''));
+      }
+    );
+    req.on('timeout', () => {
+      req.destroy();
+      finish('');
+    });
+    req.on('error', () => finish(''));
+  });
+}
+
+function declaredIconUrls(html, base) {
+  const out = [];
+  if (!html) return out;
+  const linkRe = /<link\b[^>]*>/gi;
+  let m;
+  while ((m = linkRe.exec(html))) {
+    const tag = m[0];
+    const relM = /\brel\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+    if (!relM) continue;
+    const rel = (relM[2] || relM[3] || relM[4] || '').toLowerCase();
+    if (!/(^|\s)(shortcut\s+icon|icon|apple-touch-icon|apple-touch-icon-precomposed)(\s|$)/i.test(rel)) continue;
+    const hrefM = /\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+    const href = hrefM && (hrefM[2] || hrefM[3] || hrefM[4] || '');
+    if (!href) continue;
+    let abs;
+    try {
+      abs = new URL(href, base).toString();
+    } catch {
+      continue;
+    }
+    if (!/^https?:\/\//i.test(abs)) continue;
+    if (!out.includes(abs)) out.push(abs);
+    if (out.length >= 4) break;
+  }
+  return out;
 }
 
 /* 只按文件头认格式，不信 Content-Type：favicon.ico 被报成别 MIME 是常态，
@@ -2009,7 +2107,10 @@ async function resolveIcon(link, template) {
   }
   const tried = [];
   const cache = readIconCache();
-  for (const src of sources) {
+  const seen = new Set();
+  const trySource = async (src) => {
+    if (!src.url || seen.has(src.url)) return null;
+    seen.add(src.url);
     const rec = cache[src.url];
     // 1) 这个地址以前抓到过：直接把 NAS 上存着的那一张回出去，一次网都不出
     if (rec && !rec.failAt) {
@@ -2022,7 +2123,7 @@ async function resolveIcon(link, template) {
     // 2) 六小时内刚试过没拿到：这一档跳过，别每次开页面都对着死站发请求
     if (rec && rec.failAt && Date.now() - Number(rec.failAt) < ICON_FAIL_TTL) {
       tried.push({ label: src.label, url: src.url, error: (rec.error || '最近刚试过') + '（暂缓重试）' });
-      continue;
+      return null;
     }
     try {
       const got = await fetchIconShared(src.url);
@@ -2036,8 +2137,32 @@ async function resolveIcon(link, template) {
       const why = String((e && e.message) || e).slice(0, 120);
       tried.push({ label: src.label, url: src.url, error: why });
       writeIconCache(src.url, { failAt: Date.now(), error: why });
+      return null;
+    }
+  };
+
+  // 猜的几档先试（内网 ico → 外网 ico）；模板放最后：站点自己声明的图标比公共 favicon 服务可信
+  const templateSources = sources.filter((s) => s.label === 'favicon 模板');
+  for (const src of sources) {
+    if (templateSources.includes(src)) continue;
+    const r = await trySource(src);
+    if (r) return r;
+  }
+
+  // 猜不到不代表站点没有：读一遍页面，把它自己声明的 <link rel="icon"> 补进候选
+  for (const page of [link.urlLan, link.url].filter(Boolean)) {
+    const html = await fetchPageHtml(page);
+    for (const url of declaredIconUrls(html, page)) {
+      const r = await trySource({ url, label: '站点声明的图标' });
+      if (r) return r;
     }
   }
+
+  for (const src of templateSources) {
+    const r = await trySource(src);
+    if (r) return r;
+  }
+
   // 全都落空时不装作成功：把每一档试到什么、为什么不算，原样带回给调用方
   const e = new Error('按顺序试过了，都没拿到图标：' + tried.map((t) => `${t.label}（${t.error}）`).join('、'));
   e.tried = tried;
