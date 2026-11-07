@@ -139,7 +139,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.2.2
+镜像：ghcr.io/peekaboo789/nasphere:1.2.3
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -207,10 +207,10 @@ chmod +x deploy.sh
 在安装目录里执行：
 
 ```bash
-./deploy.sh --tag 1.2.2
+./deploy.sh --tag 1.2.3
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.2`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.3`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -267,7 +267,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.2`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.3`，拉下来直接起容器。
 
 默认访问：
 
@@ -300,8 +300,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.2.2-linux-amd64.tar.gz
-docker tag local/nasphere:1.2.2 ghcr.io/peekaboo789/nasphere:1.2.2
+docker load -i nasphere-1.2.3-linux-amd64.tar.gz
+docker tag local/nasphere:1.2.3 ghcr.io/peekaboo789/nasphere:1.2.3
 docker compose up -d
 ```
 
@@ -313,10 +313,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.2 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.3 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.2.2
+docker pull ghcr.io/peekaboo789/nasphere:1.2.3
 ```
 
 然后：
@@ -330,7 +330,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.2.2
+  ghcr.io/peekaboo789/nasphere:1.2.3
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -385,7 +385,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.2-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.3-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -467,7 +467,7 @@ ico 排在模板前面：站点自己那份就是原图，公共 favicon 服务�
 
 手动选过图标的不会被这套动作盖掉：在弹层里点了 Emoji / 图片 / 首字母任一档、往图标框里打了字、点了抓取按钮、上传了图，都算你自己定的。新建时那一档只是占位，不算手动，所以抓到了就顶掉它。抓取还在路上时你改了图标，回来那份对不上就不写——手动那份说话。
 
-出厂自带「常用」那一组的八条是配置文件里写好的，没经过「加入主页」这一步，所以不抓图；想让它们也固定成 NAS 上那一张，逐张开编辑应用点那颗按钮。
+出厂自带「常用」那一组的八条是配置文件里写好的，没经过「加入主页」这一步——服务启动后会把这类仍是「站点图标」档、图标还空着的卡片统一抓一次：抓到就存进 NAS 并改成固定图标，之后打开页面只从 NAS 读。抓不到的保持「站点图标」档，由浏览器按上面那串顺序自己试；留档里的六小时暂缓会让下次启动不再对它出网。
 
 自动那一次和手动那颗按钮共用一份留档 `data/icons.json`：同一个图标地址只出网一次，第二次直接回 NAS 上那一张（响应里标 `cached`），并发抓同一个地址也只发一个请求；抓失败的地址六小时内不再重试，到点自动解禁；留档最多 400 条，超了按时间淘汰最旧的。清孤儿上传文件时这份留档算「还在用」，只被留档引用的图不会被删。
 
@@ -1645,7 +1645,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.2.2`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.2.3`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1686,10 +1686,10 @@ dat/
 修改数据目录。
 
 ```bash
-./deploy.sh --tag 1.2.2
+./deploy.sh --tag 1.2.3
 ```
 
-指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.2`。
+指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.3`。
 
 ```bash
 ./deploy.sh --dry-run
@@ -1698,7 +1698,7 @@ dat/
 只显示操作，不执行。
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.2-linux-arm64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.3-linux-arm64.tar.gz
 ```
 
 使用离线镜像，跳过 `docker pull`。
@@ -1898,6 +1898,12 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.2.3
+
+存量卡片的图标改成一次性固定到 NAS：服务启动后在后台把仍是「站点图标」档、图标还空着的卡片抓一遍（首启自带「常用」那八条也在内），抓到就存进 `data/uploads/` 并把卡片改成固定图标。之后打开页面只从 NAS 读，不再去站点要 favicon——此前这些老卡片每次开页面都会把图标重新拉一遍。
+
+抓不到的卡片保持原样，留档里的六小时暂缓会拦住重试。新建应用那一下的抓取也一并修好：出厂默认档是 Emoji，原先的门槛只放「站点图标」档过去，新建的卡因此从没自动抓过图；现在只要没手动改过图标，抓到就顶掉占位，抓取途中改了图标则不写。
 
 ## v1.2.2
 

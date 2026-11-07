@@ -2000,21 +2000,13 @@ function fetchIconAt(target, redirectsLeft) {
   });
 }
 
-async function handleIconFetch(req, res) {
-  let body;
-  try {
-    body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
-  } catch {
-    return send(res, 400, { error: '请求格式错误' });
+async function resolveIcon(link, template) {
+  const sources = iconSourceList(link, template);
+  if (!sources.length) {
+    const e = new Error('内网 / 外网网址至少填一条 http(s) 地址，才有站点图标可抓');
+    e.status = 400;
+    throw e;
   }
-  // 网址由调用方给（就是这张卡片自己填的那两条），模板只认配置里那一份：
-  // 前端传什么都不看，免得这个接口被人拿来打任意地址。
-  const link = {
-    url: urlish(pick(body, ['url', 'href', 'link'])),
-    urlLan: urlish(pick(body, ['urlLan', 'url_lan', 'lanUrl', 'lan_url'])),
-  };
-  const sources = iconSourceList(link, readConfig().appearance.iconTemplate);
-  if (!sources.length) return send(res, 400, { error: '内网 / 外网网址至少填一条 http(s) 地址，才有站点图标可抓' });
   const tried = [];
   const cache = readIconCache();
   for (const src of sources) {
@@ -2024,7 +2016,7 @@ async function handleIconFetch(req, res) {
       const keep = iconCachedFile(rec);
       if (keep) {
         tried.push({ label: src.label, url: src.url, cached: true });
-        return send(res, 200, { url: keep, label: src.label, source: src.url, tried, cached: true });
+        return { url: keep, label: src.label, source: src.url, tried, cached: true };
       }
     }
     // 2) 六小时内刚试过没拿到：这一档跳过，别每次开页面都对着死站发请求
@@ -2039,18 +2031,95 @@ async function handleIconFetch(req, res) {
       // 内容寻址：同一个图标反复抓只占一份文件，写之前看一眼，省一次落盘
       if (!fs.existsSync(file)) fs.writeFileSync(file, got.buf);
       writeIconCache(src.url, { file: '/media/' + name, label: src.label, at: Date.now() });
-      return send(res, 200, { url: '/media/' + name, label: src.label, source: src.url, tried });
+      return { url: '/media/' + name, label: src.label, source: src.url, tried };
     } catch (e) {
       const why = String((e && e.message) || e).slice(0, 120);
       tried.push({ label: src.label, url: src.url, error: why });
       writeIconCache(src.url, { failAt: Date.now(), error: why });
     }
   }
-  // 全都落空时不装作成功：把每一档试到什么、为什么不算，原样带回给页面
-  send(res, 404, {
-    error: '按顺序试过了，都没拿到图标：' + tried.map((t) => `${t.label}（${t.error}）`).join('、'),
-    tried,
-  });
+  // 全都落空时不装作成功：把每一档试到什么、为什么不算，原样带回给调用方
+  const e = new Error('按顺序试过了，都没拿到图标：' + tried.map((t) => `${t.label}（${t.error}）`).join('、'));
+  e.tried = tried;
+  throw e;
+}
+
+async function handleIconFetch(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+  } catch {
+    return send(res, 400, { error: '请求格式错误' });
+  }
+  // 网址由调用方给（就是这张卡片自己填的那两条），模板只认配置里那一份：
+  // 前端传什么都不看，免得这个接口被人拿来打任意地址。
+  const link = {
+    url: urlish(pick(body, ['url', 'href', 'link'])),
+    urlLan: urlish(pick(body, ['urlLan', 'url_lan', 'lanUrl', 'lan_url'])),
+  };
+  try {
+    return send(res, 200, await resolveIcon(link, readConfig().appearance.iconTemplate));
+  } catch (e) {
+    return send(res, e.status || 404, { error: e.message, tried: e.tried || [] });
+  }
+}
+
+/* 存量卡片的图标固定：老版本建的卡片（含首启自带的「常用」8 条）是 auto 档、icon 为空，
+   每次打开页面浏览器都要去站点要一次 favicon——图标会「再出来一遍」，内网卡片还可能闪一下。
+   服务起来后在后台把这些卡片抓一次、存进 NAS 并改成 image 档，之后页面只读 /media。
+   抓不到的保持原样；留档里的六小时暂缓会让下次启动不再对它出网。 */
+async function pinLegacyIcons() {
+  let cfg;
+  try {
+    cfg = readConfig();
+  } catch {
+    return;
+  }
+  const targets = [];
+  for (const g of cfg.groups || []) {
+    for (const l of g.links || []) {
+      if (l && l.id && l.iconKind === 'auto' && !l.icon && (l.url || l.urlLan)) {
+        targets.push({ id: l.id, url: l.url, urlLan: l.urlLan });
+      }
+    }
+  }
+  if (!targets.length) return;
+  console.log(`图标固定：${targets.length} 张 auto 档卡片开始抓取`);
+  const fixed = new Map();
+  let next = 0;
+  const worker = async () => {
+    while (next < targets.length) {
+      const t = targets[next++];
+      try {
+        const r = await resolveIcon({ url: t.url, urlLan: t.urlLan }, readConfig().appearance.iconTemplate);
+        if (r && r.url) fixed.set(t.id, r.url);
+      } catch {
+        // 失败原因已经记进留档，下一次启动先看六小时暂缓
+      }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  if (!fixed.size) {
+    console.log('图标固定：一张都没抓到');
+    return;
+  }
+  // 抓图这段时间里可能有人保存过配置：重新读一遍再写，只动还是 auto 空图标的那几条
+  const now = readConfig();
+  let hit = 0;
+  for (const g of now.groups || []) {
+    for (const l of g.links || []) {
+      const url = l && fixed.get(l.id);
+      if (url && l.iconKind === 'auto' && !l.icon) {
+        l.icon = url;
+        l.iconKind = 'image';
+        hit += 1;
+      }
+    }
+  }
+  if (hit) {
+    writeConfig(now);
+    console.log(`图标固定：${hit} 张已存到 NAS`);
+  }
 }
 
 /* 清空图标留档：data/icons.json 抹掉，只被留档引用的那几张图跟着被回收。
@@ -2322,6 +2391,10 @@ server.listen(PORT, HOST, () => {
   if (auth.source === 'default') {
     console.warn('!! 正在使用默认密码 admin123，请尽快在「设置 → 安全」中修改，或用环境变量 NAV_PASSWORD 首次启动');
   }
+  // 存量 auto 卡片在后台固定一次：不挡监听，失败也不影响服务
+  setTimeout(() => {
+    pinLegacyIcons().catch((e) => console.warn('图标固定失败：' + e.message));
+  }, 800);
 });
 
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
