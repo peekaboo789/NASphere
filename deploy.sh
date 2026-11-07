@@ -685,6 +685,79 @@ esac
 # 页面只从 /host 那一层数出有几个目录，就列几卷，所以这里唯一的口径就是把挂点名摆正。
 # 清单没写就先探一遍：把这台机器上真实存在的存储卷全部只读挂进来，主页于是能看见每一卷。
 # 写 HOST_VOLUMES=none 才是「只挂数据目录、别探」。
+
+# 升级时数据目录不能跟着「这次在哪个目录跑脚本」走：旧版本装在别的目录、用 docker run 起的、
+# 或者数据放在具名卷里，都会让新目录看起来是空的。先看一眼现有的 NASphere 容器：
+# 宿主目录上已经有配置就沿用那条路径；数据不在宿主目录上，就趁容器还在先拷进新目录。
+LEGACY_CID=""
+LEGACY_MOUNT=""
+
+if command -v docker >/dev/null 2>&1; then
+
+  while read -r cid cimg cname; do
+
+    [ -n "$cid" ] || continue
+
+    m="$(docker_cmd inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Type}}|{{.Source}}{{end}}{{end}}' "$cid" 2>/dev/null || true)"
+
+    [ -n "$m" ] || continue
+
+    LEGACY_CID="$cid"
+    LEGACY_MOUNT="$m"
+
+    case "$m" in
+      bind\|*)
+        src="${m#*|}"
+        [ -n "$src" ] && [ -f "$src/config.json" ] && break
+        ;;
+    esac
+
+  done <<EOF
+$(docker_cmd ps -a --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null | { grep -Ei 'nasphere' || true; } | head -5)
+EOF
+
+fi
+
+if [ -n "$LEGACY_CID" ] && [ ! -f "$DATA_DIR/config.json" ]; then
+
+  case "$LEGACY_MOUNT" in
+
+    bind\|*)
+
+      legacy_src="${LEGACY_MOUNT#*|}"
+
+      if [ -n "$legacy_src" ] && [ -f "$legacy_src/config.json" ]; then
+
+        if [ -z "$CLI_DATA_DIR$ENV_DATA_DIR$DOTENV_DATA_DIR" ]; then
+          if [ "$(absolute_path "$legacy_src")" != "$(absolute_path "$DATA_DIR")" ]; then
+            DATA_DIR="$(absolute_path "$legacy_src")"
+            log "沿用旧容器（$LEGACY_CID）的数据目录：$DATA_DIR"
+          fi
+        else
+          warn "旧容器的数据目录是 $legacy_src，本次显式指定了 $DATA_DIR（不会自动搬）"
+        fi
+
+      fi
+      ;;
+
+    *)
+      if [ "$DRY" = 1 ]; then
+        printf '  [dry-run] 把旧容器 %s 的 /app/data 拷到 %q\n' "$LEGACY_CID" "$DATA_DIR"
+      else
+        run fs_cmd mkdir -p "$DATA_DIR"
+        log "旧容器的数据不在宿主目录上，先拷到 $DATA_DIR"
+        if docker_cmd cp "$LEGACY_CID:/app/data/." "$DATA_DIR/" 2>/dev/null; then
+          log "已把旧容器的数据拷进 $DATA_DIR"
+        else
+          warn "旧容器里没有可拷的 /app/data（可能本来就没启动过）"
+        fi
+      fi
+      ;;
+
+  esac
+
+fi
+
 EXTRA_MOUNTS=""
 # 挂点名 → 宿主机路径的那份对应关系，最后写成 compose 里的 HOST_VOLUME_MAP。
 # 容器里的挂载表只有 /host/<挂点名>，宿主机那一条路径只有这里知道，不交给它卡片上就少一段挂载点。
@@ -1275,7 +1348,7 @@ log "启动 NASphere"
 if [ "$DRY" = 0 ] && docker_cmd inspect "$COMPOSE_PROJECT" >/dev/null 2>&1; then
 
   legacy_img="$(docker_cmd inspect -f '{{.Config.Image}}' "$COMPOSE_PROJECT" 2>/dev/null || true)"
-  legacy_data="$(docker_cmd inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' "$COMPOSE_PROJECT" 2>/dev/null || true)"
+  legacy_data="$(docker_cmd inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Type}}|{{.Source}}{{end}}{{end}}' "$COMPOSE_PROJECT" 2>/dev/null || true)"
 
   case "$legacy_img" in
     "$IMAGE" | "$IMAGE":* | ghcr.io/peekaboo789/nasphere | ghcr.io/peekaboo789/nasphere:* | local/nasphere | local/nasphere:*) ;;
@@ -1284,11 +1357,23 @@ if [ "$DRY" = 0 ] && docker_cmd inspect "$COMPOSE_PROJECT" >/dev/null 2>&1; then
       ;;
   esac
 
-  if [ -z "$legacy_data" ]; then
-    die "旧容器 $COMPOSE_PROJECT 的 /app/data 没有挂在宿主机目录上，直接删会丢数据：先 docker cp 出来，再 docker rm -f $COMPOSE_PROJECT"
-  fi
+  # 数据在宿主目录上就留在那儿，删容器不动它；不在宿主目录上的，删除前再兜一次底
+  case "$legacy_data" in
+    '')
+      if [ ! -f "$DATA_DIR/config.json" ]; then
+        log "旧容器没有 /app/data 挂载，删除前先拷一份出来"
+        docker_cmd cp "$COMPOSE_PROJECT:/app/data/." "$DATA_DIR/" 2>/dev/null || true
+      fi
+      ;;
+    bind\|*)
+      legacy_src="${legacy_data#*|}"
+      if [ -n "$legacy_src" ] && [ "$(absolute_path "$legacy_src")" != "$(absolute_path "$DATA_DIR")" ]; then
+        warn "旧容器的数据目录是 $legacy_src（本次没有沿用），删容器不会删那里的数据"
+      fi
+      ;;
+  esac
 
-  log "清理旧版本留下的同名容器：$COMPOSE_PROJECT（$legacy_img，数据在 $legacy_data）"
+  log "清理旧版本留下的同名容器：$COMPOSE_PROJECT（$legacy_img）"
   docker_cmd rm -f "$COMPOSE_PROJECT" || die "删不掉旧容器 $COMPOSE_PROJECT"
 
 fi
