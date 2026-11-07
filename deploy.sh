@@ -1269,6 +1269,30 @@ fi
 
 log "启动 NASphere"
 
+# 老版本（docker run 起的，或旧 compose 里写死了 container_name: nasphere）会留下一个
+# 就叫 nasphere 的容器，名字和端口都被它占着，新的 compose 会报 container name is already in use。
+# 确认是 NASphere 的镜像、/app/data 真挂在宿主机目录上，再删掉——数据在宿主目录里，删容器不丢。
+if [ "$DRY" = 0 ] && docker_cmd inspect "$COMPOSE_PROJECT" >/dev/null 2>&1; then
+
+  legacy_img="$(docker_cmd inspect -f '{{.Config.Image}}' "$COMPOSE_PROJECT" 2>/dev/null || true)"
+  legacy_data="$(docker_cmd inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' "$COMPOSE_PROJECT" 2>/dev/null || true)"
+
+  case "$legacy_img" in
+    "$IMAGE" | "$IMAGE":* | ghcr.io/peekaboo789/nasphere | ghcr.io/peekaboo789/nasphere:* | local/nasphere | local/nasphere:*) ;;
+    *)
+      die "已有一个叫 $COMPOSE_PROJECT 的容器，但不是 NASphere 的（镜像：${legacy_img:-未知}）。先自己处理它，或用 COMPOSE_PROJECT=别的名字 再装一套"
+      ;;
+  esac
+
+  if [ -z "$legacy_data" ]; then
+    die "旧容器 $COMPOSE_PROJECT 的 /app/data 没有挂在宿主机目录上，直接删会丢数据：先 docker cp 出来，再 docker rm -f $COMPOSE_PROJECT"
+  fi
+
+  log "清理旧版本留下的同名容器：$COMPOSE_PROJECT（$legacy_img，数据在 $legacy_data）"
+  docker_cmd rm -f "$COMPOSE_PROJECT" || die "删不掉旧容器 $COMPOSE_PROJECT"
+
+fi
+
 # 起容器这一步失败不能就地了断：set -e 下 compose up 一挂，下面「等待服务 → 自动回滚」整段都跑不到，
 # 而旧镜像明明还在本机（上面刚留了 $IMAGE:rollback）。折成失败标记，让那段回滚真的接手。
 UP_OK=1

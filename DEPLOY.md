@@ -320,6 +320,7 @@ docker compose up -d        # 或 ./deploy.sh
 | `✕ 不支持的 CPU 架构：…` | 机器既不是 x86_64 也不是 aarch64 | 脚本只测过这两种。照 §4 手工起 compose 试试（先确认那个镜像能在这台机器上跑起来） |
 | 探活失败、已自动回滚 | `cd <安装目录> && docker compose logs --tail 50`；`data/config.json` 是否被手改坏 | JSON 语法错服务仍会用默认配置起来且不覆盖你的文件，修好语法再刷新；端口被占看下一条 |
 | 端口没起来 / `Address already in use` | 宿主上 `18086` 被占（`ss -tlnp \| grep 18086`），或者另一条路线的容器还在跑 | `./deploy.sh --port 9000`，或 `.env` 里写 `HOST_PORT=9000`；两边同时在跑就 `docker compose down` 掉另一边 |
+| `Conflict. The container name "/nasphere" is already in use` | 老版本留下过一个就叫 `nasphere` 的容器（`docker run` 起的，或旧 compose 里写死了 `container_name: nasphere`），新 compose 想用同一个名字 | `./deploy.sh` 会自己清掉它（先确认镜像是 NASphere 的、`/app/data` 挂在宿主目录才删）；手工路线先 `docker rm -f nasphere` 再 `docker compose up -d`。数据在宿主 `data/` 里，删容器不丢 |
 | `docker.sock: connect version mismatch` 或组件全显示「Docker 不可用」 | 套接字没挂进来、路径不是 `/var/run/docker.sock`、或版本过旧 | `deploy.sh` 路线：安装目录 `.env` 里改 `DOCKER_SOCK` 后重跑（脚本会把它一起写进 compose 的 `DOCKER_HOST`）。手工 compose 路线：改 `docker-compose.yml` 里那行 `- /var/run/docker.sock:/var/run/docker.sock`（左右两边保持同一个宿主机路径最省事）。不需要这能力就把那行注释掉，其余功能照常 |
 | 上传图标 / 壁纸失败 | 反向代理的 `client_max_body_size`；容器 `MAX_BODY`（默认 8MB） | 反代放宽到同值以上；`MAX_BODY` 要改就 `docker run -e MAX_BODY=…`（compose 里加 `environment`）后重起 |
 | 登录一直提示「尝试次数过多，请 1 分钟后再试」 | 每 IP 8 次/分钟的限流；限流只看 TCP 对端地址，不读 `X-Forwarded-For` | 等一分钟即可（重启容器会清空计数）。套了反向代理时所有访客共用同一个计数桶，家里人一起用容易互相牵连——这种场景优先直连端口或走 VPN |
