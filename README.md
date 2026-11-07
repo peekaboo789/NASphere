@@ -139,7 +139,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.2.6
+镜像：ghcr.io/peekaboo789/nasphere:1.2.7
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -209,10 +209,10 @@ chmod +x deploy.sh
 在安装目录里执行：
 
 ```bash
-./deploy.sh --tag 1.2.6
+./deploy.sh --tag 1.2.7
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.6`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.7`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -284,7 +284,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.6`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.7`，拉下来直接起容器。
 
 默认访问：
 
@@ -317,8 +317,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.2.6-linux-amd64.tar.gz
-docker tag local/nasphere:1.2.6 ghcr.io/peekaboo789/nasphere:1.2.6
+docker load -i nasphere-1.2.7-linux-amd64.tar.gz
+docker tag local/nasphere:1.2.7 ghcr.io/peekaboo789/nasphere:1.2.7
 docker compose up -d
 ```
 
@@ -330,10 +330,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.6 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.7 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.2.6
+docker pull ghcr.io/peekaboo789/nasphere:1.2.7
 ```
 
 然后：
@@ -347,7 +347,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.2.6
+  ghcr.io/peekaboo789/nasphere:1.2.7
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -402,7 +402,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.6-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.7-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -1667,7 +1667,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.2.6`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.2.7`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1708,10 +1708,10 @@ dat/
 修改数据目录。
 
 ```bash
-./deploy.sh --tag 1.2.6
+./deploy.sh --tag 1.2.7
 ```
 
-指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.6`。
+指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.7`。
 
 ```bash
 ./deploy.sh --dry-run
@@ -1720,7 +1720,7 @@ dat/
 只显示操作，不执行。
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.6-linux-arm64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.7-linux-arm64.tar.gz
 ```
 
 使用离线镜像，跳过 `docker pull`。
@@ -1920,6 +1920,12 @@ NASphere 当前是：
 ---
 
 # 🆕 更新日志
+
+## v1.2.7
+
+设置 → 数据 新增「在线更新」：从 GitHub Releases 检查新版本，下载 `nasphere-<版本>-app.tar.gz`，先直连、失败再走可填的下载镜像前缀；升级包一律校验 sha256，对不上就取消。更新前把配置、账号、图标留档、更新设置和上传件备份到数据目录 `backups/`（保留最近 3 份，上传件用硬链接），只替换 `server/`、`public/`、`package.json`，数据目录不动，然后自动重启。容器部署更新的是当前容器里的程序文件，重建容器后会回到镜像版本，建议随后也更新镜像。
+
+从这一版起，每个 Release 都会附带 `nasphere-<版本>-app.tar.gz` 和它的 `.sha256`，在线更新用；两个离线镜像包照旧。
 
 ## v1.2.6
 
