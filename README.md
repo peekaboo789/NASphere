@@ -216,6 +216,19 @@ chmod +x deploy.sh
 
 一键安装过的那条命令也可以直接重跑。
 
+### 设置里的「在线更新」
+
+打开 **设置 → 数据 → 在线更新**，点「检查更新」会去 GitHub Releases 看最新版本；有新版本时出现「立即更新」：
+
+* 下载 `nasphere-<版本>-app.tar.gz` 升级包，先直连 GitHub，失败再走下面填的下载镜像前缀
+* 包一定校验 sha256（优先用 GitHub 返回的 digest，其次用同名 `.sha256` 附件），对不上就取消、什么都不动
+* 更新前把 `config.json`、`auth.json`、`icons.json`、`update.json` 和 `uploads/` 备份到 `data/backups/`（保留最近 3 份；上传件用硬链接，不另占空间）
+* 只替换 `server/`、`public/`、`package.json`，数据目录一个字节不动，然后自动重启
+
+容器部署时替换的是当前容器里的程序文件；之后如果重建容器，会回到镜像里的版本，建议随后也用 `./deploy.sh --tag <版本>` 或 `docker compose pull && docker compose up -d` 把镜像更新到同一版。
+
+发布新版本时，除两个离线镜像包外还要上传 `nasphere-<版本>-app.tar.gz` 和它的 `.sha256`，否则那个版本没法在线更新。
+
 项目数据默认保存在：
 
 ```text

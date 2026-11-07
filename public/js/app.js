@@ -4045,6 +4045,95 @@ const App = {
       }
     });
 
+    // ---- 在线更新 ----
+    const updateState = $('#updateState');
+    const updateApply = $('#updateApply');
+    let updateTarget = '';
+    const paintUpdate = (text, bad) => {
+      updateState.textContent = text;
+      updateState.style.color = bad ? 'var(--danger, #ff6b6b)' : '';
+    };
+    paintUpdate(`当前 v${(Store.session && Store.session.version) || '?'}`);
+    Api.updateMirror()
+      .then((r) => {
+        $('#updateMirror').value = (r && r.mirror) || '';
+      })
+      .catch(() => {});
+
+    $('#updateCheck').addEventListener('click', async () => {
+      const btn = $('#updateCheck');
+      btn.disabled = true;
+      updateApply.hidden = true;
+      paintUpdate('正在检查…');
+      try {
+        const r = await Api.updateCheck();
+        if (r.hasUpdate) {
+          updateTarget = r.latest;
+          paintUpdate(`发现新版本 v${r.latest}（当前 v${r.current}）`);
+          updateApply.hidden = false;
+        } else {
+          paintUpdate(`已是最新版本 v${r.current}`);
+        }
+      } catch (err) {
+        paintUpdate('检查失败：' + err.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    updateApply.addEventListener('click', async () => {
+      if (!updateTarget) return;
+      updateApply.disabled = true;
+      $('#updateCheck').disabled = true;
+      paintUpdate(`正在下载并校验 v${updateTarget}…`);
+      try {
+        const r = await Api.updateApply();
+        paintUpdate(`已更新到 v${r.to}，正在重启…`);
+        const started = Date.now();
+        let dropped = false;
+        const timer = setInterval(async () => {
+          try {
+            const resp = await fetch('/api/health', { cache: 'no-store' });
+            if (!resp.ok) {
+              dropped = true;
+              return;
+            }
+            const j = await resp.json();
+            if (j && j.version === r.to) {
+              clearInterval(timer);
+              paintUpdate(`已更新到 v${r.to}（数据已保留，更新前备份在 ${String(r.backup || '').replace(/\\/g, '/')}）`);
+              setTimeout(() => location.reload(), 700);
+              return;
+            }
+            if (dropped) {
+              clearInterval(timer);
+              paintUpdate(`更新没生效：服务仍是 v${j.version}，请查看容器日志`, true);
+            }
+          } catch {
+            dropped = true;
+          }
+          if (Date.now() - started > 90000) {
+            clearInterval(timer);
+            paintUpdate('等待重启超时：请刷新页面；容器部署请确认 restart 策略', true);
+          }
+        }, 1500);
+      } catch (err) {
+        updateApply.disabled = false;
+        $('#updateCheck').disabled = false;
+        paintUpdate('更新失败：' + err.message, true);
+      }
+    });
+
+    $('#updateMirrorSave').addEventListener('click', async () => {
+      try {
+        const r = await Api.saveUpdateMirror($('#updateMirror').value.trim());
+        $('#updateMirror').value = r.mirror || '';
+        this.toast(r.mirror ? '镜像前缀已保存' : '镜像前缀已清空');
+      } catch (err) {
+        this.toast('保存失败：' + err.message, 4000, true);
+      }
+    });
+
     $('#credentialsForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const account = $('#accountInput').value.trim();

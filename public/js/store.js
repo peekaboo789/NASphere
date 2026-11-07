@@ -218,6 +218,11 @@ const Api = {
   },
   // 页面把图标显示出来后回来落一份：服务端只认这张卡/这个引擎自己的候选地址
   saveIcon: (id, url, kind) => Api.call('/api/icon/save', { method: 'POST', body: { id, url, kind } }),
+  // 在线更新：检查 GitHub Releases、下载升级包并替换程序文件、镜像前缀
+  updateCheck: () => Api.call('/api/update/check'),
+  updateApply: () => Api.call('/api/update/apply', { method: 'POST', body: {} }),
+  updateMirror: () => Api.call('/api/update/mirror'),
+  saveUpdateMirror: (mirror) => Api.call('/api/update/mirror', { method: 'POST', body: { mirror } }),
   // 让服务端按写死的顺序替这张卡抓一次图标（页面在 https 下够不着内网 http 图标时靠它）
   fetchIcon: (url, urlLan) => Api.call('/api/icon/fetch', { method: 'POST', body: { url, urlLan } }),
   // 清空「抓过的图标」留档：只影响以后再抓，配置里在用的图标一张不动

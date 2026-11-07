@@ -6,11 +6,20 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
+const zlib = require('zlib');
 
 const PORT = Number(process.env.PORT || 18086);
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = path.resolve(process.env.DATA_DIR || '/data');
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const APP_ROOT = path.resolve(__dirname, '..');
+const APP_VERSION = (() => {
+  try {
+    return String(require(path.join(APP_ROOT, 'package.json')).version || '');
+  } catch {
+    return '';
+  }
+})();
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 const AUTH_PATH = path.join(DATA_DIR, 'auth.json');
@@ -714,6 +723,7 @@ function sessionView(authed) {
   return {
     authed,
     defaultPasswordInUse: auth.source === 'default',
+    version: APP_VERSION,
     ...(authed
       ? { account: auth.user, defaultAccountInUse: accountKey(auth.user) === accountKey(DEFAULT_ACCOUNT) }
       : {}),
@@ -2424,6 +2434,346 @@ function serveStatic(req, res, pathname) {
   });
 }
 
+/* ---------- 在线更新：从 GitHub Releases 取最新版，下载 app 升级包，校验后只换程序文件 ---------- */
+
+const UPDATE_API = 'https://api.github.com/repos/peekaboo789/NASphere/releases/latest';
+const UPDATE_PREFS_PATH = path.join(DATA_DIR, 'update.json');
+const UPDATE_BUNDLE_MAX = 40 * 1024 * 1024;
+const UPDATE_KEEP_BACKUPS = 3;
+let updatePrefs = null;
+let latestRelease = null;
+let updateRunning = false;
+
+function readUpdatePrefs() {
+  if (updatePrefs) return updatePrefs;
+  try {
+    const j = JSON.parse(fs.readFileSync(UPDATE_PREFS_PATH, 'utf8'));
+    updatePrefs = { mirror: typeof j.mirror === 'string' ? j.mirror : '' };
+  } catch {
+    updatePrefs = { mirror: '' };
+  }
+  return updatePrefs;
+}
+
+function writeUpdatePrefs(mirror) {
+  updatePrefs = { mirror: String(mirror || '').trim().replace(/\/+$/, '') };
+  try {
+    writePrivate(UPDATE_PREFS_PATH, JSON.stringify(updatePrefs, null, 2));
+  } catch (e) {
+    console.warn('update.json 写入失败：' + e.message);
+  }
+  latestRelease = null;
+}
+
+function httpGetBuffer(url, { timeout = 15000, maxBytes = 2 * 1024 * 1024, redirects = 3 } = {}) {
+  return new Promise((resolve, reject) => {
+    let target;
+    try {
+      target = new URL(url);
+    } catch {
+      return reject(new Error('地址不对'));
+    }
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') return reject(new Error('只支持 http/https'));
+    const lib = target.protocol === 'https:' ? https : http;
+    const req = lib.get(
+      target,
+      { headers: { 'User-Agent': 'NASphere/' + APP_VERSION, Accept: '*/*' }, timeout },
+      (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
+          res.resume();
+          return resolve(
+            httpGetBuffer(new URL(res.headers.location, target).toString(), { timeout, maxBytes, redirects: redirects - 1 })
+          );
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error('HTTP ' + res.statusCode));
+        }
+        const chunks = [];
+        let size = 0;
+        res.on('data', (c) => {
+          size += c.length;
+          if (size > maxBytes) {
+            req.destroy(new Error('文件太大'));
+            return;
+          }
+          chunks.push(c);
+        });
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('下载超时')));
+    req.on('error', reject);
+  });
+}
+
+function verParts(v) {
+  return String(v || '')
+    .replace(/^v/i, '')
+    .split(/[.+-]/)
+    .slice(0, 3)
+    .map((n) => Number(n) || 0);
+}
+
+function isNewerVersion(a, b) {
+  const x = verParts(a);
+  const y = verParts(b);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+}
+
+async function fetchLatestRelease(force) {
+  if (!force && latestRelease && Date.now() - latestRelease.at < 5 * 60 * 1000) return latestRelease.value;
+  const mirror = readUpdatePrefs().mirror;
+  const urls = [UPDATE_API];
+  if (mirror) urls.push(mirror + '/' + UPDATE_API);
+  let last = null;
+  for (const u of urls) {
+    try {
+      const raw = await httpGetBuffer(u, { timeout: 10000, maxBytes: 1024 * 1024 });
+      const j = JSON.parse(raw.toString('utf8'));
+      if (j && j.tag_name) {
+        latestRelease = { at: Date.now(), value: j };
+        return j;
+      }
+      last = new Error('GitHub 回了看不懂的内容');
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw new Error('连不上 GitHub Releases：' + (last ? last.message : '未知错误'));
+}
+
+function assetList(rel) {
+  return Array.isArray(rel && rel.assets) ? rel.assets : [];
+}
+
+function tarStr(h, a, b) {
+  return h.subarray(a, b).toString('utf8').replace(/\0.*$/, '');
+}
+
+function tarOct(h, a, b) {
+  return parseInt(h.subarray(a, b).toString('ascii').replace(/\0.*$/, '').trim() || '0', 8) || 0;
+}
+
+// 只认普通文件和目录；链接、设备文件一律跳过，带 .. 或绝对路径的包直接拒绝
+function extractAppTar(buf, dest) {
+  const tar = zlib.gunzipSync(buf);
+  let off = 0;
+  let longName = '';
+  let count = 0;
+  while (off + 512 <= tar.length) {
+    const h = tar.subarray(off, off + 512);
+    if (h.every((b) => b === 0)) break;
+    const raw = tarStr(h, 0, 100);
+    const prefix = tarStr(h, 345, 500);
+    const size = tarOct(h, 124, 136);
+    const type = String.fromCharCode(h[156] || 48);
+    off += 512;
+    const body = tar.subarray(off, off + size);
+    off += Math.ceil(size / 512) * 512;
+    if (type === 'L') {
+      longName = body.toString('utf8').replace(/\0.*$/, '');
+      continue;
+    }
+    const name = (longName || (prefix ? prefix + '/' + raw : raw)).replace(/^\.\//, '');
+    longName = '';
+    if (!name) continue;
+    if (name.startsWith('/') || name.split('/').some((p) => p === '..')) throw new Error('升级包里有不安全的路径');
+    if (++count > 4000) throw new Error('升级包条目太多');
+    const dst = path.join(dest, name);
+    if (type === '5') {
+      fs.mkdirSync(dst, { recursive: true });
+      continue;
+    }
+    if (type !== '0') continue;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.writeFileSync(dst, body, { mode: tarOct(h, 100, 108) & 0o777 });
+  }
+  return count;
+}
+
+function sha256Hex(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+// 数据目录只读不删：配置、账号、图标留档、更新设置各拷一份；上传件硬链接过去，不另占空间
+function backupBeforeUpdate(toTag) {
+  const root = path.join(DATA_DIR, 'backups');
+  fs.mkdirSync(root, { recursive: true });
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const dir = path.join(root, `${stamp}-v${APP_VERSION}-to-v${toTag}`);
+  fs.mkdirSync(path.join(dir, 'uploads'), { recursive: true });
+  for (const f of ['config.json', 'auth.json', 'icons.json', 'update.json']) {
+    const src = path.join(DATA_DIR, f);
+    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, f));
+  }
+  try {
+    for (const name of fs.readdirSync(UPLOAD_DIR)) {
+      const src = path.join(UPLOAD_DIR, name);
+      if (!fs.statSync(src).isFile()) continue;
+      try {
+        fs.linkSync(src, path.join(dir, 'uploads', name));
+      } catch {
+        fs.copyFileSync(src, path.join(dir, 'uploads', name));
+      }
+    }
+  } catch {}
+  const dirs = fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()
+    .reverse();
+  for (const old of dirs.slice(UPDATE_KEEP_BACKUPS)) fs.rmSync(path.join(root, old), { recursive: true, force: true });
+  return dir;
+}
+
+async function downloadAppBundle(rel, tag) {
+  const name = `nasphere-${tag}-app.tar.gz`;
+  const assets = assetList(rel);
+  const asset = assets.find((a) => a && a.name === name);
+  if (!asset || !asset.browser_download_url) throw new Error(`v${tag} 没有提供 ${name}，不能在线更新`);
+  const mirror = readUpdatePrefs().mirror;
+  let buf = null;
+  let last = null;
+  for (const u of [asset.browser_download_url, ...(mirror ? [mirror + '/' + asset.browser_download_url] : [])]) {
+    try {
+      buf = await httpGetBuffer(u, { timeout: 60000, maxBytes: UPDATE_BUNDLE_MAX });
+      break;
+    } catch (e) {
+      last = e;
+    }
+  }
+  if (!buf) throw new Error('下载升级包失败：' + (last ? last.message : '未知错误'));
+
+  let expected = asset.digest ? String(asset.digest).replace(/^sha256:/i, '').toLowerCase() : '';
+  if (!expected) {
+    const sumAsset = assets.find((a) => a && a.name === name + '.sha256');
+    if (sumAsset && sumAsset.browser_download_url) {
+      for (const u of [sumAsset.browser_download_url, ...(mirror ? [mirror + '/' + sumAsset.browser_download_url] : [])]) {
+        try {
+          const raw = (await httpGetBuffer(u, { timeout: 15000, maxBytes: 4096 })).toString('utf8');
+          const m = /([a-f0-9]{64})/i.exec(raw);
+          if (m) {
+            expected = m[1].toLowerCase();
+            break;
+          }
+        } catch {}
+      }
+    }
+  }
+  if (!expected) throw new Error('这个版本没提供 sha256，无法校验，已取消');
+  const got = sha256Hex(buf);
+  if (got !== expected) {
+    throw new Error(`sha256 校验失败（包 ${got.slice(0, 12)}… ≠ 记录 ${expected.slice(0, 12)}…），已取消`);
+  }
+  return buf;
+}
+
+function restartForUpdate() {
+  console.log('在线更新：程序文件已替换，准备重启');
+  // 容器里靠 restart 策略把同一个容器拉起来；裸机留一个脱离的子进程，等旧进程退出后再拉起
+  if (!fs.existsSync('/.dockerenv')) {
+    try {
+      const code =
+        `setTimeout(function(){require('child_process').spawn(${JSON.stringify(process.execPath)},['server/index.js'],` +
+        `{cwd:${JSON.stringify(APP_ROOT)},env:process.env,detached:true,stdio:'ignore'}).unref();},1500);`;
+      require('child_process')
+        .spawn(process.execPath, ['-e', code], { cwd: APP_ROOT, env: process.env, detached: true, stdio: 'ignore' })
+        .unref();
+    } catch (e) {
+      console.warn('自动重启失败，请手动启动：' + e.message);
+    }
+  }
+  setTimeout(() => process.exit(0), 300);
+}
+
+async function handleUpdateApply(req, res) {
+  if (updateRunning) return send(res, 429, { error: '更新已经在进行中，别重复点' });
+  const rel = await fetchLatestRelease(true);
+  const tag = String(rel.tag_name || '').replace(/^v/i, '');
+  if (!tag) return send(res, 502, { error: 'GitHub 没给版本号' });
+  if (!isNewerVersion(tag, APP_VERSION)) return send(res, 409, { error: `已经是最新版本 v${APP_VERSION}` });
+  if (updateRunning) return send(res, 429, { error: '更新已经在进行中，别重复点' });
+  updateRunning = true;
+  try {
+    const buf = await downloadAppBundle(rel, tag);
+    const dir = path.join(APP_ROOT, '.update-' + Date.now());
+    fs.mkdirSync(dir, { recursive: true });
+    try {
+      extractAppTar(buf, dir);
+      const pkgPath = path.join(dir, 'package.json');
+      if (
+        !fs.existsSync(path.join(dir, 'server', 'index.js')) ||
+        !fs.existsSync(path.join(dir, 'public', 'index.html')) ||
+        !fs.existsSync(pkgPath)
+      ) {
+        throw new Error('升级包内容不完整');
+      }
+      const pkgVersion = String(JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || '');
+      if (pkgVersion !== tag) throw new Error(`升级包版本 ${pkgVersion || '空'} 与发布版本 ${tag} 不一致`);
+
+      const backup = backupBeforeUpdate(tag);
+      const oldDir = path.join(APP_ROOT, '.update-old-' + Date.now());
+      fs.mkdirSync(oldDir, { recursive: true });
+      const moved = [];
+      try {
+        for (const item of ['server', 'public', 'package.json']) {
+          const cur = path.join(APP_ROOT, item);
+          if (fs.existsSync(cur)) {
+            fs.renameSync(cur, path.join(oldDir, item));
+            moved.push(item);
+          }
+          fs.renameSync(path.join(dir, item), cur);
+        }
+      } catch (e) {
+        for (const item of moved) {
+          try {
+            fs.rmSync(path.join(APP_ROOT, item), { recursive: true, force: true });
+            fs.renameSync(path.join(oldDir, item), path.join(APP_ROOT, item));
+          } catch {}
+        }
+        throw new Error('替换程序文件失败，已回滚：' + e.message);
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log(`在线更新：v${APP_VERSION} → v${tag}，备份在 ${backup}`);
+      send(res, 200, { ok: true, from: APP_VERSION, to: tag, backup: path.relative(DATA_DIR, backup) });
+      setTimeout(restartForUpdate, 400);
+    } catch (e) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw e;
+    }
+  } catch (e) {
+    updateRunning = false;
+    throw e;
+  }
+}
+
+function updateView(rel) {
+  const latest = String((rel && rel.tag_name) || '').replace(/^v/i, '');
+  return {
+    current: APP_VERSION,
+    latest,
+    hasUpdate: !!latest && isNewerVersion(latest, APP_VERSION),
+    name: String((rel && rel.name) || ''),
+    url: String((rel && rel.html_url) || ''),
+    publishedAt: String((rel && rel.published_at) || ''),
+  };
+}
+
+// 清理一天前留下的替换目录（新版本已经跑起来了，旧目录只用于手动回滚）
+try {
+  for (const n of fs.readdirSync(APP_ROOT)) {
+    if (!/^\.update(-old)?-\d+$/.test(n)) continue;
+    const full = path.join(APP_ROOT, n);
+    if (Date.now() - fs.statSync(full).mtimeMs > 86400000) fs.rmSync(full, { recursive: true, force: true });
+  }
+} catch {}
+
 function serveMedia(req, res, pathname) {
   const name = path.basename(decodePath(pathname));
   if (!name) return send(res, 404, 'not found');
@@ -2478,7 +2828,7 @@ const server = http.createServer((req, res) => {
   }
   const p = url.pathname;
 
-  if (p === '/api/health') return send(res, 200, { ok: true, ip: HOST, port: PORT });
+  if (p === '/api/health') return send(res, 200, { ok: true, ip: HOST, port: PORT, version: APP_VERSION });
 
   if (!/^(GET|POST|PUT|HEAD)$/.test(req.method)) return send(res, 405, { error: 'method not allowed' }, { Allow: 'GET, POST, PUT, HEAD' });
 
@@ -2583,6 +2933,36 @@ const server = http.createServer((req, res) => {
   if (p === '/api/icon/fetch' && req.method === 'POST') return handleIconFetch(req, res);
 
   if (p === '/api/icon/save' && req.method === 'POST') return handleIconSave(req, res);
+
+  if (p === '/api/update/check' && req.method === 'GET') {
+    return fetchLatestRelease()
+      .then((rel) => send(res, 200, updateView(rel)))
+      .catch((e) => send(res, 502, { error: e.message }));
+  }
+
+  if (p === '/api/update/apply' && req.method === 'POST') {
+    return handleUpdateApply(req, res).catch((e) => send(res, e.status || 502, { error: e.message }));
+  }
+
+  if (p === '/api/update/mirror' && req.method === 'GET') {
+    return send(res, 200, { mirror: readUpdatePrefs().mirror }, { 'Cache-Control': 'no-store' });
+  }
+
+  if (p === '/api/update/mirror' && req.method === 'POST') {
+    return readBody(req)
+      .then((raw) => {
+        let v = '';
+        try {
+          v = String(JSON.parse(raw.toString('utf8') || '{}').mirror || '').trim();
+        } catch {
+          return send(res, 400, { error: '请求格式错误' });
+        }
+        if (v && !/^https?:\/\/[^\s]+$/i.test(v)) return send(res, 400, { error: '镜像前缀要以 http:// 或 https:// 开头' });
+        writeUpdatePrefs(v);
+        send(res, 200, { mirror: readUpdatePrefs().mirror });
+      })
+      .catch((e) => send(res, e.status || 400, { error: e.message }));
+  }
 
   // 「数据」栏那个清空按钮：只清抓图留档，配置里在用的图标一张不动
   if (p === '/api/icon/cache/clear' && req.method === 'POST') return handleIconCacheClear(req, res);

@@ -286,6 +286,17 @@
         </div>
         <p class="muted" id="importHint">文件只在本机读，内容随保存一起写进 NAS。</p>
       </div>
+      <h3 class="sub">在线更新</h3>
+      <p class="muted">从 GitHub Releases 检查新版本。更新前把配置、账号、图标留档和上传件备份到数据目录 <code>backups/</code>（保留最近 3 份），只替换程序文件，不碰数据目录。</p>
+      <p class="muted">容器部署时替换的是当前容器里的程序文件；之后如果重建容器，会回到镜像里的版本，建议同时更新镜像。</p>
+      <div class="btn-row">
+        <button class="btn" type="button" id="updateCheck">检查更新</button>
+        <button class="btn primary" type="button" id="updateApply" hidden>立即更新</button>
+      </div>
+      <p class="muted" id="updateState">当前版本读取中…</p>
+      <label class="row"><span>下载镜像前缀（可选）</span><input class="field" id="updateMirror" placeholder="https://gh-proxy.com"></label>
+      <div class="btn-row"><button class="btn" type="button" id="updateMirrorSave">保存</button></div>
+      <p class="muted">先直连 GitHub，失败再走镜像；文件一律校验 sha256，镜像改不了内容。</p>
       <h3 class="sub">分组概览</h3>
       <button class="btn primary" type="button" id="groupNewBtn">＋ 新建分组</button>
       <ul class="group-list" id="groupList"></ul>
