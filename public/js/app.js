@@ -601,11 +601,47 @@ const App = {
   // 壁纸绘制主页与登录页共用；登录页拿的是 /api/login-page 里已经解析成图片地址的那一份
   paintWallpaper(bg, veil, wp) {
     const fits = { cover: 'cover', contain: 'contain', stretch: '100% 100%' };
+    const objectFit = { cover: 'cover', contain: 'contain', stretch: 'fill' };
     veil.style.opacity = String(wp.dim);
     bg.style.filter = wp.blur ? `blur(${wp.blur}px)` : '';
     // 只在 .bg 上写长写属性，填充方式才能被 CSS 变量带过去
     bg.style.setProperty('--wp-size', fits[wp.fit] || 'cover');
     const cssUrl = (u) => `url("${String(u).replace(/["\\]/g, '')}")`;
+
+    // 视频壁纸：同一个背景层里只留一个 <video>；换到图片/渐变的档位时把它收掉
+    const isVideo =
+      (wp.kind === 'upload' || wp.kind === 'url') &&
+      /\.(mp4|webm|ogv|m4v)(\?|#|$)/i.test(String(wp.value || ''));
+    let vid = bg.querySelector(':scope > video.wp-video');
+    if (isVideo) {
+      if (!vid) {
+        vid = document.createElement('video');
+        vid.className = 'wp-video';
+        vid.muted = true;
+        vid.loop = true;
+        vid.autoplay = true;
+        vid.playsInline = true;
+        vid.setAttribute('playsinline', '');
+        vid.setAttribute('muted', '');
+        vid.setAttribute('preload', 'auto');
+        bg.appendChild(vid);
+      }
+      bg.style.backgroundImage = 'none';
+      bg.style.backgroundColor = '#0a0d13';
+      vid.style.objectFit = objectFit[wp.fit] || 'cover';
+      if (vid.getAttribute('src') !== wp.value) {
+        vid.setAttribute('src', wp.value);
+        const p = vid.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+      return;
+    }
+    if (vid) {
+      vid.pause();
+      vid.removeAttribute('src');
+      vid.load();
+      vid.remove();
+    }
 
     if (wp.kind === 'none') {
       bg.style.backgroundImage = 'none';
@@ -1722,6 +1758,7 @@ const App = {
     });
     img.addEventListener('load', () => {
       if (cacheKey && link.iconKind !== 'image' && srcs[at]) localStorage.setItem(cacheKey, srcs[at]);
+      if (link.iconKind === 'auto' && link.id && srcs[at]) this.pinFoundIcon(link.id, srcs[at]);
     });
     img.src = srcs[0];
     box.appendChild(img);
@@ -1764,6 +1801,55 @@ const App = {
         this.renderDockerTiles();
         this.renderAppList();
         this.renderDockerPane();
+      })
+      .catch(() => {});
+  },
+
+  /* 浏览器这边已经显示出来了，就别让下次开页面再下载一遍：
+     回调服务端按同一个地址存进 NAS，成功后把这张卡改成 /media 固定。
+     同一页里同一张卡只试一次；服务端只认这张卡自己的候选地址，不做任意 URL 抓取。 */
+  pinFoundIcon(id, url) {
+    if (!this._iconSaved) this._iconSaved = new Set();
+    const key = id + '|' + url;
+    if (this._iconSaved.has(key)) return;
+    this._iconSaved.add(key);
+    Api.saveIcon(id, url)
+      .then((r) => {
+        if (!r || !r.url) return;
+        let hit = false;
+        Store.mutate((c) => {
+          for (const l of [...(c.groups || []).flatMap((g) => g.links || []), ...(c.docker ? c.docker.items || [] : [])]) {
+            if (l.id !== id) continue;
+            if (l.iconKind === 'auto') {
+              l.icon = r.url;
+              l.iconKind = 'image';
+              hit = true;
+            }
+            return;
+          }
+        });
+        if (hit) {
+          this.renderGroups();
+          this.renderDockerTiles();
+          this.renderAppList();
+        }
+      })
+      .catch(() => {});
+  },
+
+  // 引擎图标同理：显示过一次就落盘，之后读 /media
+  pinFoundEngineIcon(id, url) {
+    if (!this._engineSaved) this._engineSaved = new Set();
+    const key = id + '|' + url;
+    if (this._engineSaved.has(key)) return;
+    this._engineSaved.add(key);
+    Api.saveIcon(id, url, 'engine')
+      .then((r) => {
+        if (!r || !r.url) return;
+        Store.mutate((c) => {
+          const e = (c.search.engines || []).find((x) => x.id === id);
+          if (e && !e.icon) e.icon = r.url;
+        });
       })
       .catch(() => {});
   },
@@ -2119,7 +2205,7 @@ const App = {
       box.textContent = (eng.name || domainOf(eng.url || '') || '?').trim().charAt(0).toUpperCase();
     };
     const domain = domainOf(eng.url || '');
-    const src = domain ? String(Store.cfg.appearance.iconTemplate || '').replace('{domain}', domain) : '';
+    const src = eng.icon || (domain ? String(Store.cfg.appearance.iconTemplate || '').replace('{domain}', domain) : '');
     if (!src) {
       fallback();
       return box;
@@ -2128,6 +2214,9 @@ const App = {
     img.alt = '';
     img.decoding = 'async';
     img.addEventListener('error', fallback);
+    img.addEventListener('load', () => {
+      if (!eng.icon && domain) this.pinFoundEngineIcon(eng.id, src);
+    });
     img.src = src;
     box.appendChild(img);
     return box;
@@ -3692,17 +3781,31 @@ const App = {
     $('#wpFile').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
+      const isVideo = /^video\//.test(file.type) || /\.(mp4|webm|ogv|m4v)$/i.test(file.name);
       try {
-        const url = await Api.uploadImage(await fileToDataUrl(file));
-        Store.mutate((c) => {
-          c.appearance.wallpaper.kind = 'upload';
-          c.appearance.wallpaper.value = url;
-        });
-        this.applyAppearance();
-        this.syncSettings();
-        this.toast('壁纸已上传到 NAS，所有设备同步');
+        if (isVideo) {
+          $('#wpUploadState').textContent = '正在上传视频…';
+          const url = await Api.uploadVideo(file);
+          Store.mutate((c) => {
+            c.appearance.wallpaper.kind = 'upload';
+            c.appearance.wallpaper.value = url;
+          });
+          this.applyAppearance();
+          this.syncSettings();
+          this.toast('动态壁纸已上传到 NAS，所有设备同步');
+        } else {
+          const url = await Api.uploadImage(await fileToDataUrl(file));
+          Store.mutate((c) => {
+            c.appearance.wallpaper.kind = 'upload';
+            c.appearance.wallpaper.value = url;
+          });
+          this.applyAppearance();
+          this.syncSettings();
+          this.toast('壁纸已上传到 NAS，所有设备同步');
+        }
       } catch (err) {
         this.toast('上传失败：' + err.message, 4000, true);
+        this.syncSettings();
       }
       e.target.value = '';
     });
@@ -3801,7 +3904,10 @@ const App = {
       e.target.value = v;
       Store.mutate((c) => {
         c.appearance.iconTemplate = v;
+        // 模板换了，之前从旧模板落盘的引擎图标作废，下次显示时按新模板重新存
+        for (const en of c.search.engines || []) en.icon = '';
       });
+      this.renderSearch();
       this.renderGroups();
     });
 
@@ -3974,3 +4080,13 @@ const App = {
 };
 
 document.addEventListener('DOMContentLoaded', () => App.init());
+
+// 视频壁纸在隐藏标签页里可能被浏览器按住不放：回到前台补一次 play
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  const v = document.querySelector('.bg > video.wp-video, .login-bg > video.wp-video');
+  if (v && v.paused) {
+    const p = v.play();
+    if (p && p.catch) p.catch(() => {});
+  }
+});

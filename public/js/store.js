@@ -204,6 +204,20 @@ const Api = {
     const r = await Api.call('/api/media', { method: 'POST', body: { image: dataUrl } });
     return r.urls[0];
   },
+  // 动态壁纸：视频按原始字节直接传，不走 data URL；80MB 上限由服务端管
+  uploadVideo: async (file) => {
+    const res = await fetch('/api/media/video', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': (file && file.type) || 'application/octet-stream' },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data && data.error) || `上传失败 (${res.status})`);
+    return data.url;
+  },
+  // 页面把图标显示出来后回来落一份：服务端只认这张卡/这个引擎自己的候选地址
+  saveIcon: (id, url, kind) => Api.call('/api/icon/save', { method: 'POST', body: { id, url, kind } }),
   // 让服务端按写死的顺序替这张卡抓一次图标（页面在 https 下够不着内网 http 图标时靠它）
   fetchIcon: (url, urlLan) => Api.call('/api/icon/fetch', { method: 'POST', body: { url, urlLan } }),
   // 清空「抓过的图标」留档：只影响以后再抓，配置里在用的图标一张不动

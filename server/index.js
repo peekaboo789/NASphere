@@ -148,6 +148,9 @@ const MIME = {
   '.webp': 'image/webp',
   '.avif': 'image/avif',
   '.ico': 'image/x-icon',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.ogv': 'video/ogg',
   '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8',
 };
@@ -541,6 +544,8 @@ function sanitize(raw) {
             id: takeId('e', o.id !== undefined ? o.id : o.key, name + '|' + u, engIds),
             name: name || hostOf(u) || '未命名引擎',
             url: u.includes('{query}') ? u.slice(0, LIM.url) : '',
+            // 引擎图标也固定到 NAS：页面第一次显示成功后回调 /api/icon/save 写进来
+            icon: urlish(pick(o, ['icon'])),
           };
         })
         .filter((e) => e.url)
@@ -1860,6 +1865,47 @@ function handleMediaUpload(req, res) {
   }).catch((e) => send(res, e.status || 400, { error: e.message }));
 }
 
+/* 动态壁纸：视频不走 data URL（体积大、base64 还要再涨三分之一），直接按原始字节流收。
+   只认 MP4 / WebM / Ogg 三种浏览器能直接播的容器，按文件头认，不信 Content-Type。 */
+const VIDEO_MAX_BYTES = 80 * 1024 * 1024;
+
+function sniffVideoExt(buf) {
+  if (buf.length >= 12 && buf.toString('ascii', 4, 8) === 'ftyp') return '.mp4';
+  if (buf.length >= 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return '.webm';
+  if (buf.length >= 4 && buf.toString('ascii', 0, 4) === 'OggS') return '.ogv';
+  return '';
+}
+
+function handleVideoUpload(req, res) {
+  const len = Number(req.headers['content-length'] || 0);
+  if (len && len > VIDEO_MAX_BYTES) return send(res, 413, { error: '视频最大 80MB' });
+  const chunks = [];
+  let size = 0;
+  let over = false;
+  req.on('data', (c) => {
+    if (over) return;
+    size += c.length;
+    if (size > VIDEO_MAX_BYTES) {
+      over = true;
+      // 先把 413 发出去，响应写完再掐连接，别让超传的文件继续占带宽
+      res.on('finish', () => req.destroy());
+      send(res, 413, { error: '视频最大 80MB' });
+      return;
+    }
+    chunks.push(c);
+  });
+  req.on('end', () => {
+    if (over) return;
+    const buf = Buffer.concat(chunks);
+    const ext = sniffVideoExt(buf);
+    if (!ext) return send(res, 400, { error: '只支持 MP4 / WebM / Ogg 视频' });
+    const name = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 20) + ext;
+    fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
+    send(res, 200, { url: '/media/' + name, bytes: buf.length });
+  });
+  req.on('error', () => {});
+}
+
 /* ---------- 抓取站点图标：页面在 https 下打不开内网 http 图标时，由服务端替它出网 ----------
    抓回来的图和上传的图走同一套存法（sha1 内容寻址 + UPLOAD_DIR + /media/），
    所以抓完只是草稿，点保存才进配置；没保存就被 GC 清掉也不丢什么。 */
@@ -2189,6 +2235,64 @@ async function handleIconFetch(req, res) {
   }
 }
 
+/* 页面自己把图标显示出来之后回来落一份：这张图已经在浏览器里验证能拿到了，
+   服务端按同一个地址再取一次存进 NAS，之后这张卡改成 /media 固定下来，开页面不再出网。
+   地址只认这张卡自己的候选（或这个引擎自己的模板），不做任意 URL 抓取。 */
+async function cacheIconSource(src) {
+  const rec = readIconCache()[src.url];
+  if (rec && !rec.failAt) {
+    const keep = iconCachedFile(rec);
+    if (keep) return { url: keep, label: src.label, source: src.url, cached: true };
+  }
+  if (rec && rec.failAt && Date.now() - Number(rec.failAt) < ICON_FAIL_TTL) {
+    throw new Error('最近刚试过没拿到（暂缓重试）');
+  }
+  const got = await fetchIconShared(src.url);
+  const name = crypto.createHash('sha1').update(got.buf).digest('hex').slice(0, 20) + got.ext;
+  const file = path.join(UPLOAD_DIR, name);
+  if (!fs.existsSync(file)) fs.writeFileSync(file, got.buf);
+  writeIconCache(src.url, { file: '/media/' + name, label: src.label, at: Date.now() });
+  return { url: '/media/' + name, label: src.label, source: src.url };
+}
+
+async function handleIconSave(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+  } catch {
+    return send(res, 400, { error: '请求格式错误' });
+  }
+  const id = String(pick(body, ['id']) || '');
+  const url = String(pick(body, ['url']) || '');
+  const kind = String(pick(body, ['kind']) || 'link');
+  if (!id || !url) return send(res, 400, { error: '缺 id 或 url' });
+
+  const cfg = readConfig();
+  let src = null;
+
+  if (kind === 'engine') {
+    const eng = (cfg.search && cfg.search.engines ? cfg.search.engines : []).find((e) => e && e.id === id);
+    if (!eng) return send(res, 404, { error: '没有这个搜索引擎' });
+    const host = iconDomainOf(eng.url);
+    const tpl = String(cfg.appearance.iconTemplate || '').trim();
+    const expect = host && tpl ? tpl.replace('{domain}', host) : '';
+    if (!expect || url !== expect) return send(res, 400, { error: '这个地址不是这个引擎的图标' });
+    src = { url, label: '搜索引擎图标' };
+  } else {
+    const all = [...(cfg.groups || []).flatMap((g) => g.links || []), ...(cfg.docker ? cfg.docker.items || [] : [])];
+    const card = all.find((l) => l && l.id === id);
+    if (!card) return send(res, 404, { error: '没有这张卡片' });
+    src = iconSourceList(card, cfg.appearance.iconTemplate).find((s) => s.url === url) || null;
+    if (!src) return send(res, 400, { error: '这个地址不是这张卡的图标候选' });
+  }
+
+  try {
+    return send(res, 200, await cacheIconSource(src));
+  } catch (e) {
+    return send(res, 502, { error: String((e && e.message) || e).slice(0, 200) });
+  }
+}
+
 /* 存量卡片的图标固定：老版本建的卡片（含首启自带的「常用」8 条）是 auto 档、icon 为空，
    每次打开页面浏览器都要去站点要一次 favicon——图标会「再出来一遍」，内网卡片还可能闪一下。
    服务起来后在后台把这些卡片抓一次、存进 NAS 并改成 image 档，之后页面只读 /media。
@@ -2326,11 +2430,41 @@ function serveMedia(req, res, pathname) {
   const file = path.join(UPLOAD_DIR, name);
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return send(res, 404, 'not found');
-    res.writeHead(200, {
+    const base = {
       'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'Content-Length': st.size,
       'Cache-Control': 'public, max-age=31536000, immutable',
-    });
+      'Accept-Ranges': 'bytes',
+    };
+    // 视频要能拖动进度、循环播放：浏览器发 Range 就回 206 那一段，别每次整段重下
+    const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || '').trim());
+    if (m) {
+      let start;
+      let end;
+      if (!m[1]) {
+        const n = Number(m[2]);
+        if (!Number.isFinite(n) || n <= 0) {
+          res.writeHead(416, { 'Content-Range': `bytes */${st.size}` });
+          return res.end();
+        }
+        start = Math.max(0, st.size - n);
+        end = st.size - 1;
+      } else {
+        start = Number(m[1]);
+        end = m[2] ? Number(m[2]) : st.size - 1;
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= st.size) {
+        res.writeHead(416, { 'Content-Range': `bytes */${st.size}` });
+        return res.end();
+      }
+      end = Math.min(end, st.size - 1);
+      res.writeHead(206, { ...base, 'Content-Length': end - start + 1, 'Content-Range': `bytes ${start}-${end}/${st.size}` });
+      if (req.method === 'HEAD') return res.end();
+      const stream = fs.createReadStream(file, { start, end });
+      stream.on('error', () => res.destroy());
+      return stream.pipe(res);
+    }
+    res.writeHead(200, { ...base, 'Content-Length': st.size });
+    if (req.method === 'HEAD') return res.end();
     pipeOrDrop(res, file);
   });
 }
@@ -2443,8 +2577,12 @@ const server = http.createServer((req, res) => {
 
   if (p === '/api/media' && req.method === 'POST') return handleMediaUpload(req, res);
 
+  if (p === '/api/media/video' && req.method === 'POST') return handleVideoUpload(req, res);
+
   // 按写死的顺序替这张卡片抓一次站点图标，存成上传目录里的固定图标
   if (p === '/api/icon/fetch' && req.method === 'POST') return handleIconFetch(req, res);
+
+  if (p === '/api/icon/save' && req.method === 'POST') return handleIconSave(req, res);
 
   // 「数据」栏那个清空按钮：只清抓图留档，配置里在用的图标一张不动
   if (p === '/api/icon/cache/clear' && req.method === 'POST') return handleIconCacheClear(req, res);

@@ -124,6 +124,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 
 .bg { transition: filter 0.3s ease, background-color 0.3s ease; background-size: var(--wp-size, cover); }
+
+/* 动态壁纸：视频铺满背景层，object-fit 由 JS 按「壁纸填充」档位写 */
+.bg > .wp-video,
+.login-bg > .wp-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
 /* 压暗层做成上轻下重的暗角：壁纸上半部照常透气，下面的玻璃面板才有东西可衬 */
 .bg-veil {
   z-index: -1;
