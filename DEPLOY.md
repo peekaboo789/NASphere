@@ -16,7 +16,7 @@
 | 一台能跑 Docker 的 NAS | 群晖 Container Manager / 绿联 UGOS / 威联通 Container Station，或任何有 `docker` 的 Linux 机器 |
 | SSH 或图形终端 | SSH 最省事。只有网页图形界面也能装：在 DSM/UGOS 的 Compose 表单里照 §4 粘 `docker-compose.yml`，卷路径写成绝对路径，套件会自己从 `ghcr.io` 拉镜像；NAS 出不了网才需要 §5 的离线包（导入后按 §4 那两行重标成 compose 里的名字） |
 | 能拉 `ghcr.io` | 三条路线里只有 §5 不需要联网拉镜像。§3 和 §4 都是 `docker pull ghcr.io/peekaboo789/nasphere:1.2.2`，不构建、不下源码，所以也不用管 `node:22-alpine` 那个基础镜像 |
-| CPU 是 x86_64 或 aarch64 | `deploy.sh` 开头就判这个，其余架构直接退出。**注意 ghcr 上目前只有 `linux/amd64` 一份 manifest**，ARM64 机型在线拉会报 `no matching manifest for linux/arm64/v8`，走 §5 的 arm64 离线包（多架构镜像推上来之后这条限制就没了） |
+| CPU 是 x86_64 或 aarch64 | `deploy.sh` 开头就判这个，其余架构直接退出。**ghcr 上 1.2.2 起是 `amd64` / `arm64` 双架构索引**；1.2.0 及更早的标签只有 `linux/amd64`，ARM64 机型拉那些会报 `no matching manifest for linux/arm64/v8`，走 §5 的 arm64 离线包 |
 | 端口没被占用 | 默认对外 `18086`（`deploy.sh --port` 或安装目录 `.env` 里 `HOST_PORT` 可改，手工 compose 就改 `docker-compose.yml` 的 `ports`），容器内固定监听 `18086`。`8080` 常被设备自带服务占用，所以默认值避开它；再冲突就换端口（见 §7） |
 
 **先决定数据目录**，之后备份、迁移、排查都靠它：建议放有存储池的卷上，例如 `/volume1/docker/nasphere/data`。默认值是安装目录里的 `./data`。
@@ -169,7 +169,7 @@ docker tag local/nasphere:1.2.2 ghcr.io/peekaboo789/nasphere:1.2.2
 docker compose up -d
 ```
 
-> ⚠️ ghcr 上目前只有 `linux/amd64` 一份 manifest（没有多架构索引）。ARM 机型（群晖多数是 `arm64/v8`）走在线那条会报 `no matching manifest for linux/arm64/v8`，请用 §5 的 **arm64** 离线包 + 上面那两行 `docker load` / `docker tag`。
+> ghcr 上 1.2.2 起是 `amd64` / `arm64` 双架构索引，ARM 机型（群晖多数是 `arm64/v8`）直接在线拉即可。1.2.0 及更早的标签只有 `linux/amd64`（没有多架构索引），拉那些才会报 `no matching manifest for linux/arm64/v8`，改用 §5 的 **arm64** 离线包 + 上面那两行 `docker load` / `docker tag`。
 
 要改端口、数据目录或镜像版本，就直接改 `docker-compose.yml` 里那三行写死的值（`image`、`ports` 冒号左边、`volumes` 冒号左边），再 `docker compose up -d`。首启密码这条路线给不进去，容器会用镜像内置的 `admin123`，登录后立刻去「设置 → 安全」改（§6、§12）。
 
@@ -316,7 +316,7 @@ docker compose up -d        # 或 ./deploy.sh
 | `连不上 docker 守护进程` | Docker / Container Manager 没启动；当前用户不在 docker 组 | 启动套件，或 `sudo ./deploy.sh`（脚本自己也会试 sudo） |
 | 一键安装报「没有权限写 …，也用不了免密 sudo」 | 目标目录的父级当前用户写不进去，而 `curl \| bash` 占住了 stdin，sudo 弹密码也输不了 | 整条命令用 root 跑（`curl … \| sudo bash`），或 `bash -s -- --root <你有权限的目录>`，或给当前用户配免密 sudo |
 | `拉取失败：ghcr.io/…`（AMD64 机器） | 这台机器到 `ghcr.io` 不通 | 换台机器 `docker save` 成离线包传上去，`./deploy.sh --tar <包>`；或者整套走 §4 的手工路线 |
-| `no matching manifest for linux/arm64/v8` | ghcr 上这个标签只有 amd64 那份 manifest | 用 §5 C-2 的 **arm64** 离线包 `./deploy.sh --tar`（脚本自动重标，不需要源码也不需要 build）。等仓库推了多架构之后这条在线就能拉 |
+| `no matching manifest for linux/arm64/v8` | 拉的是 1.2.0 及更早的标签（只有 amd64 那份 manifest） | 换成 1.2.2 或更新的标签就有双架构索引；要用旧标签就走 §5 C-2 的 **arm64** 离线包 `./deploy.sh --tar`（脚本自动重标，不需要源码也不需要 build） |
 | `✕ 不支持的 CPU 架构：…` | 机器既不是 x86_64 也不是 aarch64 | 脚本只测过这两种。照 §4 手工起 compose 试试（先确认那个镜像能在这台机器上跑起来） |
 | 探活失败、已自动回滚 | `cd <安装目录> && docker compose logs --tail 50`；`data/config.json` 是否被手改坏 | JSON 语法错服务仍会用默认配置起来且不覆盖你的文件，修好语法再刷新；端口被占看下一条 |
 | 端口没起来 / `Address already in use` | 宿主上 `18086` 被占（`ss -tlnp \| grep 18086`），或者另一条路线的容器还在跑 | `./deploy.sh --port 9000`，或 `.env` 里写 `HOST_PORT=9000`；两边同时在跑就 `docker compose down` 掉另一边 |

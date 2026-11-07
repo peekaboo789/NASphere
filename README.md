@@ -170,7 +170,7 @@ http://<NAS-IP>:18086
 http://192.168.8.99:18086
 ```
 
-> `ghcr.io` 上目前只发布了 `linux/amd64`。ARM 机型（群晖多数是 `arm64/v8`）这条命令会在拉镜像那一步报 `no matching manifest`，请改用下面的离线镜像方式。
+> `ghcr.io` 上 1.2.2 起是 `amd64` / `arm64` 双架构索引，两种机器都能直接拉；1.2.0 及更早的标签只有 `linux/amd64`，ARM 机型拉那些会在拉镜像那一步报 `no matching manifest`，改用下面的离线镜像方式。
 
 ---
 
@@ -305,7 +305,7 @@ docker tag local/nasphere:1.2.2 ghcr.io/peekaboo789/nasphere:1.2.2
 docker compose up -d
 ```
 
-`ghcr.io` 上目前只发布了 linux/amd64 一份 manifest，ARM 机型（群晖多数是 arm64/v8）在线拉会报 `no matching manifest for linux/arm64/v8`——按 `uname -m` 挑 `linux-arm64` 那份离线包，上面那两行 `docker load` / `docker tag` 照做即可。多架构镜像推上来之后这条限制就没了。
+`ghcr.io` 上 1.2.2 起是 amd64 / arm64 双架构索引，ARM 机型也能直接在线拉；1.2.0 及更早的标签只有 linux/amd64 一份 manifest，拉那些会报 `no matching manifest for linux/arm64/v8`——那种情况下按 `uname -m` 挑 `linux-arm64` 那份离线包，上面那两行 `docker load` / `docker tag` 照做即可。
 
 这条路线和 `./deploy.sh` 二选一：两边都对外占 `18086`，后起的那个会报 `port is already allocated`（`deploy.sh` 在安装目录里生成的是它自己那份 compose）。切换前先停掉另一边——脚本起的容器现在叫 `nasphere-nasphere-1`，用 `cd ./dat && docker compose down` 收尾。
 

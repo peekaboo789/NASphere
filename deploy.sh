@@ -1244,8 +1244,8 @@ else
     warn "拉取失败：$NEW_REF"
 
     if [ "$ARCH" = arm64 ]; then
-      warn "报的是 no matching manifest 的话：GHCR 上这个标签还没有 linux/arm64 那份（本仓库目前只发布 amd64）。"
-      warn "两条退路：① 用离线包 ./deploy.sh --tar nasphere-$TAG-linux-arm64.tar.gz（load 完会自动重标成 $NEW_REF）；② 让仓库推多架构镜像（buildx --platform linux/amd64,linux/arm64）。"
+      warn "报的是 no matching manifest 的话：拉的是 1.2.0 及更早的标签（那些只有 amd64）；1.2.2 起是 amd64 / arm64 双架构索引。"
+      warn "两条退路：① 换成 1.2.2 或更新的标签；② 用离线包 ./deploy.sh --tar nasphere-$TAG-linux-arm64.tar.gz（load 完会自动重标成 $NEW_REF）。"
     else
       warn "常见原因是这台机器到 ghcr.io 不通。换台机器 docker save 成离线包，再 ./deploy.sh --tar <包>。"
     fi
