@@ -680,11 +680,13 @@ const App = {
     for (const g of Store.cfg.groups) for (const l of g.links) this.flatIds.push(l.id);
     host.innerHTML = '';
     for (const g of Store.cfg.groups) host.appendChild(this.groupNode(g));
+    // 分组面板是画布上的一格：重建之后得把坐标与手柄重新写一遍（折叠、增删分组都会走到这里）
+    Board.render();
+    // FLIP 必须排在 Board.render 之后：新面板还没拿到坐标时量到的是自然流位置（页面顶上排成一串），
+    // 照那个位置起跑，卡片就会从下方一路弹上来——打开页面时本来就有一串渲染，看着像图标从下往上跳
     this.playFlip(prev);
     this.renderSideNav();
     this.updateScrollRail();
-    // 分组面板是画布上的一格：重建之后得把坐标与手柄重新写一遍（折叠、增删分组都会走到这里）
-    Board.render();
   },
 
   /* ---------- 容器组件：每张各自带坐标摆在主页上（应用矩阵那个窗口已经撤了），长宽和位置各存各的 ---------- */
@@ -1119,12 +1121,16 @@ const App = {
   /* 换序 / 跨分组移动时用 FLIP 补间，别瞬间跳位 */
   flipped: [],
   flipTimer: 0,
+  flipToken: 0,
   flatIds: [],
   navLockId: '',
   navLockTimer: 0,
 
   captureTiles() {
     if (document.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
+    // 上一轮动画还没跑完就重画了：先把它收尾。量到的必须是静止位置，
+    // 否则新一轮会从半空再弹一次，打开页面时一串渲染叠在一起就是「图标往上跳」
+    this.settleFlip();
     const map = new Map();
     for (const t of $$('#groups .tile')) {
       if (t.getClientRects().length) map.set(t.dataset.link, t.getBoundingClientRect());
@@ -1134,6 +1140,7 @@ const App = {
 
   playFlip(prev) {
     if (!prev) return;
+    this.settleFlip();
     const moved = [];
     for (const t of $$('#groups .tile')) {
       const was = prev.get(t.dataset.link);
@@ -1147,22 +1154,30 @@ const App = {
       moved.push(t);
     }
     if (!moved.length) return;
-    this.flipped.forEach((n) => this.clearFlip(n));
     this.flipped = moved;
+    const token = this.flipToken;
     // 起跑要用 rAF 等浏览器把「旧位置」画出来；标签页被切走时 rAF 不跑，所以另设一个兜底清理
-    clearTimeout(this.flipTimer);
     this.flipTimer = setTimeout(() => {
-      for (const t of this.flipped) this.clearFlip(t);
-      this.flipped = [];
+      if (token === this.flipToken) this.settleFlip();
     }, 500);
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
+        if (token !== this.flipToken) return;
         for (const t of this.flipped) {
           t.style.transition = 'transform 0.34s var(--ease-out)';
           t.style.transform = '';
         }
       })
     );
+  },
+
+  // 把正在跑的 FLIP 立刻收在终点；token 一变，排好的 rAF 也就不再动手
+  settleFlip() {
+    if (this.flipTimer) clearTimeout(this.flipTimer);
+    this.flipTimer = 0;
+    this.flipToken += 1;
+    for (const t of this.flipped) this.clearFlip(t);
+    this.flipped = [];
   },
 
   clearFlip(node) {
@@ -1797,10 +1812,7 @@ const App = {
           }
         });
         if (!hit) return;
-        this.renderGroups();
-        this.renderDockerTiles();
-        this.renderAppList();
-        this.renderDockerPane();
+        this.repaintCardIcon(link.id);
       })
       .catch(() => {});
   },
@@ -1828,13 +1840,31 @@ const App = {
             return;
           }
         });
-        if (hit) {
-          this.renderGroups();
-          this.renderDockerTiles();
-          this.renderAppList();
-        }
+        if (hit) this.repaintCardIcon(id);
       })
       .catch(() => {});
+  },
+
+  /* 图标固定后只换这一张卡的图，不重画整页。
+     整页重建会让所有卡片重新下载一遍图标（偶发失败就落成首字母），
+     还会把画布上那串 FLIP 串起来，看着就是图标从下往上跳。 */
+  repaintCardIcon(id) {
+    const link = [...(Store.cfg.groups || []).flatMap((g) => g.links || []), ...(Store.cfg.docker ? Store.cfg.docker.items || [] : [])].find(
+      (l) => l.id === id
+    );
+    if (!link) return;
+    for (const node of $$('#groups .tile, #dkLayer .dk-tile')) {
+      if (node.dataset.link !== id) continue;
+      const old = node.querySelector('.tile-icon');
+      if (!old) continue;
+      // 首字母那种多一个 letter 修饰类，其余（容器/资源/引擎）各自带着自己的类
+      const cls = [...old.classList].filter((c) => c !== 'letter').join(' ') || 'tile-icon';
+      node.replaceChild(this.iconNode(link, cls), old);
+    }
+    if (!$('#settingsModal').hidden) {
+      this.renderAppList();
+      this.renderDockerPane();
+    }
   },
 
   // 引擎图标同理：显示过一次就落盘，之后读 /media
