@@ -79,13 +79,20 @@ const iconSourceList = (link, template) => {
 /* === icon-order end === */
 
 // 一张卡片要依次试的图标地址：手动/上传的那张排最前，后面接上面写死的三档。
+// 当前用外网就把外网 ico 提到内网前面：外网模式下内网地址根本连不上，先试只会白等超时。
 // emoji / letter 两档是用户明确选的，一个地址都不给，页面直接画文字。
-const iconSrcs = (link, template) => {
+const iconSrcs = (link, template, mode) => {
   const kind = link.iconKind;
   if (kind === 'emoji' || kind === 'letter') return [];
   const out = [];
   if (kind === 'image' && link.icon) out.push(link.icon);
   for (const s of iconSourceList(link, template)) if (!out.includes(s.url)) out.push(s.url);
+  const preferred = faviconOf(mode === 'wan' ? link.url : mode === 'lan' ? link.urlLan : '');
+  const at = preferred ? out.indexOf(preferred) : -1;
+  if (at > 0) {
+    out.splice(at, 1);
+    out.splice(kind === 'image' && link.icon && out[0] === link.icon ? 1 : 0, 0, preferred);
+  }
   return out;
 };
 

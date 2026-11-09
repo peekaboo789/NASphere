@@ -139,7 +139,7 @@ docker compose up -d
 
 ```text
 安装目录：./dat
-镜像：ghcr.io/peekaboo789/nasphere:1.2.9
+镜像：ghcr.io/peekaboo789/nasphere:1.2.10
 compose 项目名：nasphere（容器叫 nasphere-nasphere-1）
 宿主端口：18086
 数据目录：./data（就在安装目录里）
@@ -209,10 +209,10 @@ chmod +x deploy.sh
 在安装目录里执行：
 
 ```bash
-./deploy.sh --tag 1.2.9
+./deploy.sh --tag 1.2.10
 ```
 
-脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.9`），ghcr 上同名标签被重推过时它会拉回新的那份。
+脚本会 pull 那个标签的镜像、用同一个 `data/` 重新起容器。不写 `--tag` 就重跑当前默认标签（`1.2.10`），ghcr 上同名标签被重推过时它会拉回新的那份。
 
 一键安装过的那条命令也可以直接重跑。
 
@@ -284,7 +284,7 @@ uploads/
 docker compose up -d
 ```
 
-镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.9`，拉下来直接起容器。
+镜像本地没有时 compose 自己拉 `ghcr.io/peekaboo789/nasphere:1.2.10`，拉下来直接起容器。
 
 默认访问：
 
@@ -317,8 +317,8 @@ http://<NAS-IP>:9000
 `ghcr.io` 拉不动的机器改用离线镜像包：`docker load` 完之后补一个同名标签再起 compose——
 
 ```bash
-docker load -i nasphere-1.2.9-linux-amd64.tar.gz
-docker tag local/nasphere:1.2.9 ghcr.io/peekaboo789/nasphere:1.2.9
+docker load -i nasphere-1.2.10-linux-amd64.tar.gz
+docker tag local/nasphere:1.2.10 ghcr.io/peekaboo789/nasphere:1.2.10
 docker compose up -d
 ```
 
@@ -330,10 +330,10 @@ docker compose up -d
 
 # 🐳 Docker Run
 
-先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.9 .`）：
+先拉镜像（想自己从源码 build 就换成 `docker build -t ghcr.io/peekaboo789/nasphere:1.2.10 .`）：
 
 ```bash
-docker pull ghcr.io/peekaboo789/nasphere:1.2.9
+docker pull ghcr.io/peekaboo789/nasphere:1.2.10
 ```
 
 然后：
@@ -347,7 +347,7 @@ docker run -d \
   -e NAV_PASSWORD='你自己的密码' \
   -v "$(pwd)/data:/app/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/peekaboo789/nasphere:1.2.9
+  ghcr.io/peekaboo789/nasphere:1.2.10
 ```
 
 `-e NAV_PASSWORD` 只在 `data/auth.json` 还不存在时生效，是唯一能在首次启动前定下非默认密码的口子——compose 和 `deploy.sh` 那两条路线都不带它。
@@ -402,7 +402,7 @@ dist/nasphere-<版本>.sha256
 将镜像包传到 NAS 后：
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.9-linux-amd64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.10-linux-amd64.tar.gz
 ```
 
 脚本会：
@@ -465,23 +465,24 @@ https://www.google.com/search?q={query}
 
 上传支持 png / jpeg / gif / webp / avif / svg / ico，单张不超过 5MB。
 
-自动取图标按写死的顺序一档一档试，任何一档拿到就收手，全部落空才用首字母：
+自动取图标按写死的顺序排优先级：浏览器把能直接拼出来的几档（当前内外网模式的 ico、另一条 ico、模板）一起预取，排在前面的先到就用它；后面的先到了，会再等前面的 300ms，等不到才用后面的。全部落空才用首字母。等图时先垫首字母，150ms 后才显出来，网慢也不会留白：
 
 ```text
 手动填的、或上传到 NAS 的那张
-站点自己的 /favicon.ico（内网网址在前，外网网址在后）
-页面里 <link rel="icon"> 声明的图标（上面那档落空时才去读页面，最多 4 个）
+站点自己的 /favicon.ico（当前内外网模式对应的那条网址在前，另一条也会同时预取）
 favicon 服务模板（设置 → 小组件，默认 icon.horse）
 名称首字母
 ```
 
-ico 排在模板前面：站点自己那份就是原图，公共 favicon 服务多半给的是转过的 png。很多站把图标放在 `/static/xxx.png` 这种猜不到的路径上，只在 HTML 里声明；浏览器自己找得到，服务端只猜 `/favicon.ico` 就会永远抓不到——所以落空后会读一遍页面，把声明的那几个补进候选（相对路径按页面地址补全），且排在模板前面。
+页面里 `<link rel="icon">` 声明的那档要读 HTML，只出现在服务端的「按顺序抓取」和自动固定那条路上；浏览器这层不读页面，开页时不会为它单独出网。
+
+ico 排在模板前面：站点自己那份就是原图，公共 favicon 服务多半给的是转过的 png。很多站把图标放在 `/static/xxx.png` 这种猜不到的路径上，只在 HTML 里声明；浏览器自己找得到，服务端只猜 `/favicon.ico` 就会永远抓不到——所以服务端落空后会读一遍页面，把声明的那几个补进候选（相对路径按页面地址补全），且排在模板前面。
 
 这个顺序不在设置里配开关，整条链路只有 favicon 服务模板这一档能改。Emoji 与首字母两档是你明确选定的，不参与这一串。
 
 想让图标固定下来，或者主页走 https 而内网 http 的图标被浏览器拦下：编辑应用 → 「按顺序抓取图标并存到 NAS」。服务端按同一串顺序替你出网取一次，抓回来的图存进 `/app/data/uploads/`（和上传的图同一套存法），这张卡改用固定图标，点保存才生效。没抓到时提示里会写明每一档试到什么，不装作成功。
 
-一条应用刚进主页的那一下，服务端会替你抓这一次：新建应用保存、从「常用站点」点一格加进来，都只在这个时刻出网取图，取到了就把这张卡写成固定图标。之后这张卡每次显示都只看配置里写死的那一份，页面永远不再自动抓取——要重来只有上面那颗按钮，或者自己换一张。抓不到就一声不吭，卡片留着「设置 → 小组件 → 默认图标来源」那一档（出厂是 Emoji 🔗）；选「站点 favicon」时，留的就是浏览器按上面那串顺序自己试出来的效果。
+一条应用刚进主页的那一下，服务端会替你抓这一次：新建应用保存、从「常用站点」点一格加进来，都只在这个时刻出网取图，取到了就把这张卡写成固定图标。之后这张卡每次显示都只看配置里写死的那一份，页面永远不再自动抓取——要重来只有上面那颗按钮，或者自己换一张。抓不到就一声不吭，卡片留着「设置 → 小组件 → 默认图标来源」那一档（出厂是 Emoji 🔗）；选「站点 favicon」时，留的就是浏览器按上面的优先级自己试出来的效果：打开页面先垫首字母，图下到了再换掉。
 
 浏览器这边每成功显示一张「站点图标」档的图标，还会回调服务端落一份：页面把刚加载成功的那个地址交给 `/api/icon/save`，服务端按同一地址取一次、存进 `data/uploads/`，然后把这张卡改成 `/media/…` 的固定图标。服务端只认这张卡自己的候选地址（或这个搜索引擎自己的模板），不接受任意 URL。搜索引擎图标第一次显示成功后也会这样固定，换图标模板时旧的那几份作废、按新模板重存。所以只要图标在页面上出现过一次，以后开页面读的都是 NAS 上的那一份，不再向站点要。
 
@@ -1667,7 +1668,7 @@ dat/
 | --------------- | -------------------------- | ------------- |
 | `INSTALL_ROOT`  | `./dat`                    | 安装目录（相对当前目录），等价于 `--root` |
 | `IMAGE`         | `ghcr.io/peekaboo789/nasphere` | 镜像仓库，换 fork 或内网仓库就改它 |
-| `TAG`           | `1.2.9`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
+| `TAG`           | `1.2.10`                    | 镜像标签（脚本里写死的默认值，不读 package.json） |
 | `HOST_PORT`     | `18086`                    | NAS 宿主机端口     |
 | `DATA_DIR`      | `<安装目录>/data`              | 宿主侧数据目录      |
 | `TZ`            | `Asia/Shanghai`            | 写进 compose 的容器时区 |
@@ -1708,10 +1709,10 @@ dat/
 修改数据目录。
 
 ```bash
-./deploy.sh --tag 1.2.9
+./deploy.sh --tag 1.2.10
 ```
 
-指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.9`。
+指定镜像版本，也就是拉 `ghcr.io/peekaboo789/nasphere:1.2.10`。
 
 ```bash
 ./deploy.sh --dry-run
@@ -1720,7 +1721,7 @@ dat/
 只显示操作，不执行。
 
 ```bash
-./deploy.sh --tar dist/nasphere-1.2.9-linux-arm64.tar.gz
+./deploy.sh --tar dist/nasphere-1.2.10-linux-arm64.tar.gz
 ```
 
 使用离线镜像，跳过 `docker pull`。
@@ -1921,6 +1922,10 @@ NASphere 当前是：
 
 # 🆕 更新日志
 
+## v1.2.10
+
+修打开主页后图标要过几秒才出来：原来是一档一档串行试图标地址，上一档不报错也不超时，下一档就一直排着；外网模式下先试内网地址时空窗最明显。现在浏览器把站点 ico（当前内外网模式对应的那条在前，另一条也会预取）和 favicon 模板一起预取，低优先级的先到了会再等 300ms，等不到才用；全部落空才回退首字母。等图时先垫首字母（150ms 后淡入），图到了原位替换，卡片位置不动。图标缓存按内外网模式分开记，旧缓存继续认；固定到 NAS 的 `/media` 图标同样走这套预取，不再串行重下。
+
 ## v1.2.9
 
 修复在线更新在 Docker 容器里替换程序文件失败：`EXDEV: cross-device link not permitted`。容器 overlayfs 不允许把镜像层里的目录改名，旧逻辑用目录 rename 挪走 `server/` 时必然失败。现在先把旧程序完整复制到 `.update-old-*` 留档，再逐文件复制覆盖；中途失败的回滚也走复制，不再对目录做 rename。回滚本身失败时不会再谎报「已回滚」，会点名没恢复回来的条目并给出旧程序所在目录。
@@ -2053,16 +2058,17 @@ NASphere 当前是：
 
 **取图标有条写死的顺序，ico 排在模板前面**
 
-一张卡该用哪张图，按这个顺序往下试，第一个拿到的就用：
+一张卡该用哪张图，按这个顺序排优先级：
 
 ```text
 1. 手动填的 / 上传到 NAS 的那张
 2. 站点自己的 /favicon.ico —— 内网网址在前、外网网址在后
-3. favicon 服务模板（默认 https://icon.horse/icon/{domain}，设置 → 小组件里可改）
-4. 名称首字母
+3. 页面里 <link rel="icon"> 声明的图标
+4. favicon 服务模板（默认 https://icon.horse/icon/{domain}，设置 → 小组件里可改）
+5. 名称首字母
 ```
 
-前面几档全落空才走到首字母，所以内网自建的站点不用填图标也有自己的图，把内网网址填上就行。Emoji 与首字母两档是你明确选定的，不进这一串；整个顺序不在设置里配开关，能改的只有第 3 档那个模板。
+服务端「按顺序抓取」严格逐档试，第一个拿到的就用；主页画卡片时浏览器把前几档一起预取，排在前面的先到就用，后面的先到了会再等 300ms，等不到才用后面的（详见「自动取图标」）。全部落空才用首字母，所以内网自建的站点不用填图标也有自己的图，把内网网址填上就行。Emoji 与首字母两档是你明确选定的，不进这一串；整个顺序不在设置里配开关，能改的只有第 4 档那个模板。
 
 **「按顺序抓取图标并存到 NAS」**
 

@@ -751,7 +751,7 @@ const App = {
   },
 
   dockerTileNode(item) {
-    return this.dkTileShell(item, [this.iconNode(item), this.dkTitleNode(item), this.dockerMetaNode(item), this.dockerStatNode()]);
+    return this.dkTileShell(item, [this.iconNode(item, 'tile-icon', this.netMode), this.dkTitleNode(item), this.dockerMetaNode(item), this.dockerStatNode()]);
   },
 
   /* 两种组件共用的外壳：坐标尺寸、名称、编辑模式那颗 ✕、长按拖、右键菜单、没填网址时点一下报状态，
@@ -828,7 +828,7 @@ const App = {
 
   resTileNode(item) {
     // 改过图标就用自己那一个（Emoji 或上传的图片），没改过是内置那四枚白色描边 SVG
-    const icon = item.icon ? this.iconNode(item, 'tile-icon dk-res-icon') : this.resBuiltInIcon(item);
+    const icon = item.icon ? this.iconNode(item, 'tile-icon dk-res-icon', this.netMode) : this.resBuiltInIcon(item);
     return this.dkTileShell(item, [icon, this.dkTitleNode(item), this.resBodyNode(item)]);
   },
 
@@ -1626,7 +1626,7 @@ const App = {
     a.draggable = Store.editMode;
     a.title = link.desc ? `${link.title}\n${link.desc}` : link.title;
 
-    const icon = this.iconNode(link);
+    const icon = this.iconNode(link, 'tile-icon', this.modeFor(groupId));
     const title = document.createElement('span');
     title.className = 'tile-title';
     title.textContent = link.title;
@@ -1731,10 +1731,20 @@ const App = {
     }
   },
 
-  iconNode(link, cls = 'tile-icon') {
+  iconNode(link, cls = 'tile-icon', mode = '') {
     const box = document.createElement('span');
     const letter = (link.title || link.url || link.urlLan || '?').trim().charAt(0).toUpperCase() || '?';
+    let waitNode = null;
+    let waitTimer = 0;
+    const dropWait = () => {
+      clearTimeout(waitTimer);
+      if (waitNode) {
+        waitNode.remove();
+        waitNode = null;
+      }
+    };
     const fallback = () => {
+      dropWait();
       box.replaceChildren(document.createTextNode(letter));
       box.className = cls + ' letter';
     };
@@ -1743,40 +1753,131 @@ const App = {
       box.textContent = link.icon;
       return box;
     }
-    // 写死的顺序：手动/上传的那张 → 站点自己的 ico（内网在前）→ favicon 模板；全落空才首字母
-    const srcs = iconSrcs(link, Store.cfg.appearance.iconTemplate);
+    // 顺序：手动/上传的那张 → 站点自己的 ico（按当前内外网模式把能连上的那条排前）→ favicon 模板；全落空才首字母
+    const srcs = iconSrcs(link, Store.cfg.appearance.iconTemplate, mode);
     if (!srcs.length) {
       fallback();
       return box;
     }
-    // 上次级联命中的那条记在 localStorage 里：下次开页面直接用，不重跑整条级联
-    const cacheKey = link.id ? 'icon:' + link.id : '';
+    // 上次级联命中的那条记在 localStorage 里（按内外网分开）：下次开页面先给它最高优先。
+    // 它若失效，会和其他候选一起被淘汰，不再像串行那样白等一整轮。
+    const cacheKey = link.id ? 'icon:' + link.id + ':' + (mode || 'any') : '';
+    const legacyKey = link.id ? 'icon:' + link.id : '';
     if (cacheKey && link.iconKind !== 'image') {
-      const hit = localStorage.getItem(cacheKey);
+      let hit = '';
+      try {
+        hit = localStorage.getItem(cacheKey) || localStorage.getItem(legacyKey) || '';
+      } catch {}
       if (hit && srcs.includes(hit) && srcs[0] !== hit) {
         srcs.splice(srcs.indexOf(hit), 1);
         srcs.unshift(hit);
       }
     }
     box.className = cls;
-    const img = document.createElement('img');
-    img.alt = '';
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    let at = 0;
-    img.addEventListener('error', () => {
-      // 每一档失败就换下一档：站方没放 ico、页面是 https 而图标是内网 http（混合内容被拦）都算在这一档失败里
-      if (at === 0 && cacheKey) localStorage.removeItem(cacheKey);
-      at += 1;
-      if (at < srcs.length) img.src = srcs[at];
-      else fallback();
-    });
-    img.addEventListener('load', () => {
-      if (cacheKey && link.iconKind !== 'image' && srcs[at]) localStorage.setItem(cacheKey, srcs[at]);
-      if (link.iconKind === 'auto' && link.id && srcs[at]) this.pinFoundIcon(link.id, srcs[at]);
-    });
-    img.src = srcs[0];
-    box.appendChild(img);
+    // 内网 ico 连不上时浏览器要等十几秒才报错，这段空窗不能留白：先垫首字母，
+    // 真的下到了再把字撤掉；150ms 内就到的图不显示占位，免得缓存图标闪一下字母
+    waitNode = document.createElement('span');
+    waitNode.className = 'icon-wait';
+    waitNode.textContent = letter;
+    box.appendChild(waitNode);
+    waitTimer = setTimeout(() => {
+      if (waitNode) waitNode.classList.add('show');
+    }, 150);
+
+    let settled = false;
+    const commit = (i, node) => {
+      if (settled) return;
+      settled = true;
+      dropWait();
+      node.alt = '';
+      node.decoding = 'async';
+      box.replaceChildren(node);
+      if (cacheKey && link.iconKind !== 'image') {
+        try {
+          localStorage.setItem(cacheKey, srcs[i]);
+          localStorage.removeItem(legacyKey);
+        } catch {}
+      }
+      if (link.iconKind === 'auto' && link.id) this.pinFoundIcon(link.id, srcs[i]);
+    };
+
+    // 每一档用独立的 Image 预取：复用同一个 img 换 src 会打断上一档，
+    // 断开的请求还可能补一个 error 回来，把下一档也一起跳掉
+    const race = (start) => {
+      if (start >= srcs.length) {
+        fallback();
+        return;
+      }
+      // 后面几档同时开跑，谁先到先用；只有「更高优先级的档还没答话」时才多等 300ms 给它追。
+      // 串行版本要等前一档超时/报错才试下一档，打开页面时图标迟迟不出来就卡在这段空窗上。
+      const probes = srcs.map(() => null);
+      let best = -1;
+      let bestNode = null;
+      let graceTimer = 0;
+      const higherDone = () => {
+        for (let i = start; i < best; i++) if (probes[i] && !probes[i].done) return false;
+        return true;
+      };
+      const finish = () => {
+        if (settled || best < 0) return;
+        clearTimeout(graceTimer);
+        for (const p of probes) if (p && p !== bestNode && !p.done) p.src = '';
+        commit(best, bestNode);
+      };
+      const check = () => {
+        if (settled || best < 0) return;
+        if (best === start || higherDone()) return finish();
+        if (graceTimer) return;
+        graceTimer = setTimeout(() => {
+          graceTimer = 0;
+          if (!settled) finish();
+        }, 300);
+      };
+      for (let i = start; i < srcs.length; i++) {
+        const p = new Image();
+        p.done = false;
+        probes[i] = p;
+        p.addEventListener('load', () => {
+          p.done = true;
+          if (settled) return;
+          if (best < 0 || i < best) {
+            best = i;
+            bestNode = p;
+          }
+          check();
+        });
+        p.addEventListener('error', () => {
+          p.done = true;
+          if (settled) return;
+          if (i === 0 && cacheKey) {
+            try {
+              localStorage.removeItem(cacheKey);
+              localStorage.removeItem(legacyKey);
+            } catch {}
+          }
+          if (best >= 0) return check();
+          if (probes.slice(start).every((x) => x && x.done)) fallback();
+        });
+      }
+      for (let i = start; i < srcs.length; i++) probes[i].src = srcs[i];
+    };
+
+    // 手动/上传的那张是用户自己选的，不拿别的候选抢它：先单独等它，只有失败才继续
+    if (link.iconKind === 'image' && link.icon && srcs[0] === link.icon) {
+      const first = new Image();
+      first.addEventListener('load', () => commit(0, first));
+      first.addEventListener('error', () => {
+        if (cacheKey) {
+          try {
+            localStorage.removeItem(cacheKey);
+          } catch {}
+        }
+        race(1);
+      });
+      first.src = srcs[0];
+      return box;
+    }
+    race(0);
     return box;
   },
 
@@ -1859,7 +1960,8 @@ const App = {
       if (!old) continue;
       // 首字母那种多一个 letter 修饰类，其余（容器/资源/引擎）各自带着自己的类
       const cls = [...old.classList].filter((c) => c !== 'letter').join(' ') || 'tile-icon';
-      node.replaceChild(this.iconNode(link, cls), old);
+      const mode = node.dataset.group ? this.modeFor(node.dataset.group) : this.netMode;
+      node.replaceChild(this.iconNode(link, cls, mode), old);
     }
     if (!$('#settingsModal').hidden) {
       this.renderAppList();
@@ -2230,9 +2332,20 @@ const App = {
   engineIcon(eng) {
     const box = document.createElement('span');
     box.className = 'eng-ico';
+    const letter = (eng.name || domainOf(eng.url || '') || '?').trim().charAt(0).toUpperCase();
+    let waitNode = null;
+    let waitTimer = 0;
+    const dropWait = () => {
+      clearTimeout(waitTimer);
+      if (waitNode) {
+        waitNode.remove();
+        waitNode = null;
+      }
+    };
     const fallback = () => {
+      dropWait();
       box.classList.add('letter');
-      box.textContent = (eng.name || domainOf(eng.url || '') || '?').trim().charAt(0).toUpperCase();
+      box.textContent = letter;
     };
     const domain = domainOf(eng.url || '');
     const src = eng.icon || (domain ? String(Store.cfg.appearance.iconTemplate || '').replace('{domain}', domain) : '');
@@ -2240,11 +2353,20 @@ const App = {
       fallback();
       return box;
     }
+    // 模板图要跨公网取，等的时候先垫首字母，不然搜索栏图标会空一拍
+    waitNode = document.createElement('span');
+    waitNode.className = 'icon-wait';
+    waitNode.textContent = letter;
+    box.appendChild(waitNode);
+    waitTimer = setTimeout(() => {
+      if (waitNode) waitNode.classList.add('show');
+    }, 150);
     const img = document.createElement('img');
     img.alt = '';
     img.decoding = 'async';
     img.addEventListener('error', fallback);
     img.addEventListener('load', () => {
+      dropWait();
       if (!eng.icon && domain) this.pinFoundEngineIcon(eng.id, src);
     });
     img.src = src;
@@ -2447,7 +2569,7 @@ const App = {
     // 读数卡留空图标 = 主页上那枚内置描边 SVG，预览得跟着画同一个，别退成首字
     const node = this.linkDraft.resMode && !this.linkDraft.icon
       ? this.resBuiltInIcon(this.linkDraft)
-      : this.iconNode({ ...this.linkDraft, url, title: this.linkDraft.title || '示例' });
+      : this.iconNode({ ...this.linkDraft, url, title: this.linkDraft.title || '示例' }, 'tile-icon', this.netMode);
     host.className = node.className;
     const kids = Array.from(node.childNodes);
     host.append(...kids);
