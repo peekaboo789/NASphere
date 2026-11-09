@@ -2692,6 +2692,22 @@ function restartForUpdate() {
   setTimeout(() => process.exit(0), 300);
 }
 
+// 容器 overlayfs 上把镜像层里的目录改名会报 EXDEV（redirect_dir 没开），所以只复制、不 rename
+function copyTree(src, dst) {
+  const st = fs.statSync(src);
+  if (st.isDirectory()) {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const name of fs.readdirSync(src)) copyTree(path.join(src, name), path.join(dst, name));
+    return;
+  }
+  fs.copyFileSync(src, dst);
+}
+
+function installTree(src, dst) {
+  fs.rmSync(dst, { recursive: true, force: true });
+  copyTree(src, dst);
+}
+
 async function handleUpdateApply(req, res) {
   if (updateRunning) return send(res, 429, { error: '更新已经在进行中，别重复点' });
   const rel = await fetchLatestRelease(true);
@@ -2719,32 +2735,45 @@ async function handleUpdateApply(req, res) {
 
       const backup = backupBeforeUpdate(tag);
       const oldDir = path.join(APP_ROOT, '.update-old-' + Date.now());
+      const items = ['server', 'public', 'package.json'];
       fs.mkdirSync(oldDir, { recursive: true });
-      const moved = [];
+      let backedUp = false;
       try {
-        for (const item of ['server', 'public', 'package.json']) {
+        // 先完整留一份旧程序再动现网；备份没做完就失败时，一个文件都还没被改
+        for (const item of items) {
           const cur = path.join(APP_ROOT, item);
-          if (fs.existsSync(cur)) {
-            fs.renameSync(cur, path.join(oldDir, item));
-            moved.push(item);
-          }
-          fs.renameSync(path.join(dir, item), cur);
+          if (fs.existsSync(cur)) copyTree(cur, path.join(oldDir, item));
         }
+        backedUp = true;
+        for (const item of items) installTree(path.join(dir, item), path.join(APP_ROOT, item));
       } catch (e) {
-        for (const item of moved) {
+        if (!backedUp) {
+          try { fs.rmSync(oldDir, { recursive: true, force: true }); } catch {}
+          throw new Error('备份旧程序失败，现网文件未动：' + e.message);
+        }
+        const failed = [];
+        for (const item of items) {
+          const old = path.join(oldDir, item);
+          if (!fs.existsSync(old)) continue;
           try {
-            fs.rmSync(path.join(APP_ROOT, item), { recursive: true, force: true });
-            fs.renameSync(path.join(oldDir, item), path.join(APP_ROOT, item));
-          } catch {}
+            installTree(old, path.join(APP_ROOT, item));
+          } catch (re) {
+            failed.push(item + '（' + re.message + '）');
+          }
+        }
+        if (failed.length) {
+          throw new Error(
+            `替换程序文件失败，回滚也未完成：${failed.join('；')}。旧程序留在 ${oldDir}，请手动恢复。原始错误：${e.message}`
+          );
         }
         throw new Error('替换程序文件失败，已回滚：' + e.message);
       }
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
       console.log(`在线更新：v${APP_VERSION} → v${tag}，备份在 ${backup}`);
       send(res, 200, { ok: true, from: APP_VERSION, to: tag, backup: path.relative(DATA_DIR, backup) });
       setTimeout(restartForUpdate, 400);
     } catch (e) {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
       throw e;
     }
   } catch (e) {
